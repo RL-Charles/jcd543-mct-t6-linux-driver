@@ -1,0 +1,8 @@
+# MCT Trigger T6 USB Display Adapter
+# VID=0x0711 PID=0x5601 (StarTech USBC2HD4 and similar)
+
+# Grant user access without root for non-daemon usage
+SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5601", MODE="0666", TAG+="uaccess"
+
+# Restart systemd service on hotplug so daemon picks up new devices
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5601", RUN+="/usr/bin/systemctl restart mct-t6-display.service"

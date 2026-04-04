@@ -1,0 +1,14 @@
+[Unit]
+Description=MCT Trigger T6 USB Display Driver
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/authentra/tools/drivers/mct_t6_display.py --daemon --mirror
+Restart=always
+RestartSec=5
+User=root
+Environment=WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/0
+
+[Install]
+WantedBy=multi-user.target

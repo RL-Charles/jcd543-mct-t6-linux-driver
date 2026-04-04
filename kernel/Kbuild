@@ -1,0 +1,2 @@
+trigger6-y := trigger6_drv.o trigger6_connector.o
+obj-m := trigger6.o
