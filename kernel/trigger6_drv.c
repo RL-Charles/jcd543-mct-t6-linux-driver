@@ -39,6 +39,13 @@
 #define DRIVER_NAME	"trigger6"
 #define DRIVER_DESC	"MCT Trigger 6 USB Display"
 
+/*
+ * Global mutex serialising USB bulk I/O across all T6 devices.
+ * Two stations on the same hub can wedge the xHCI host controller
+ * when both submit interleaved bulk URBs simultaneously.
+ */
+static DEFINE_MUTEX(t6_usb_bus_lock);
+
 static bool t6_experimental_secondary_raw;
 module_param_named(experimental_secondary_raw,
 		   t6_experimental_secondary_raw,
@@ -409,6 +416,7 @@ static int t6_bulk_write(struct t6_device *t6, const void *src, size_t len)
 	if (!chunk_buf)
 		return -ENOMEM;
 
+	mutex_lock(&t6_usb_bus_lock);
 	while (remaining) {
 		size_t chunk = min_t(size_t, T6_USB_XFER_CHUNK_SIZE, remaining);
 		int actual = 0;
@@ -430,6 +438,7 @@ static int t6_bulk_write(struct t6_device *t6, const void *src, size_t len)
 		cursor += chunk;
 		remaining -= chunk;
 	}
+	mutex_unlock(&t6_usb_bus_lock);
 
 	return ret;
 }
