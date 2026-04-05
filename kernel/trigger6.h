@@ -12,8 +12,11 @@
 #define _TRIGGER6_H_
 
 #include <linux/usb.h>
-#include <linux/spinlock.h>
-#include <linux/wait.h>
+#include <linux/mutex.h>
+#include <linux/miscdevice.h>
+#include <linux/workqueue.h>
+#include <linux/timer.h>
+#include <linux/atomic.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_device.h>
 #include <drm/drm_simple_kms_helper.h>
@@ -42,37 +45,24 @@
 #define T6_CMD_FLIP_PRIMARY	3
 #define T6_CMD_FLIP_SECONDARY	4
 
+#define T6_OUTPUT_COUNT		2
+
+/* Secondary JPEG path */
+#define T6_FMT_NV12		6
+#define T6_FMT_JPEG		13
+#define T6_JPEG_PADDING_SIZE	1024
+#define T6_JPEG_FB_SLOT_COUNT	3
+
 /* Pixel format */
 #define T6_FMT_RGB32		8   /* BGRX 32-bit */
 
 /* JPEG reset flag */
 #define T6_FLAG_RESET		0x80
 
-/* URB pool config (from udl: proven stable) */
-#define T6_MAX_URBS		20
-#define T6_URB_TIMEOUT		HZ  /* 1 second */
-
-/*
- * Per-URB node in the pool. Each has a pre-allocated DMA-coherent buffer.
- */
-struct t6_urb_node {
-	struct list_head entry;
-	struct t6_device *t6;
-	struct urb *urb;
-};
-
-/*
- * URB pool -- copied from udl architecture.
- * Pre-allocated pool of USB Request Blocks for async frame sending.
- */
-struct t6_urb_pool {
-	struct list_head list;		/* free URBs */
-	spinlock_t lock;
-	wait_queue_head_t sleep;
-	int available;
-	int count;
-	size_t buf_size;		/* per-URB buffer size */
-};
+/* USB bulk transfer tuning */
+#define T6_USB_XFER_CHUNK_SIZE	(512 * 1024)
+#define T6_USB_XFER_TIMEOUT_MS	2000
+#define T6_FRAME_MIN_INTERVAL_MS	66	/* ~15 fps max */
 
 /*
  * Bulk command header (32 bytes).
@@ -101,9 +91,62 @@ struct t6_flip_header {
 	__le32 u_offset;
 	__le32 v_offset;
 	__le32 source_format;
-	u8 padding[7];
+	u8 padding[11];
 	u8 flag;
 } __packed;
+
+enum t6_head_transport {
+	T6_HEAD_TRANSPORT_RAW = 0,
+	T6_HEAD_TRANSPORT_JPEG_CMD = 1,
+	T6_HEAD_TRANSPORT_USER_JPEG = 2,
+};
+
+struct t6_head {
+	struct t6_device *t6;
+	u8 output_idx;
+	bool connected;
+	u8 status;
+	u32 fb_addr;
+	u32 cmd_addr;
+	u32 fb_slots[T6_JPEG_FB_SLOT_COUNT];
+	u8 fb_slot_count;
+	u8 fb_slot_index;
+	u32 cmd_base_addr;
+	u32 cmd_limit_addr;
+	u32 cmd_cursor_addr;
+	int width;
+	int height;
+	char monitor_name[16];
+	u32 frame_seq;
+	u8 edid_data[256];
+	int edid_len;
+	enum t6_head_transport transport;
+
+	struct drm_simple_display_pipe pipe;
+	struct drm_connector connector;
+	u8 *tx_front;
+	u8 *tx_back;
+	size_t tx_buf_size;
+	size_t tx_len;
+	bool tx_pending;
+	unsigned long tx_last_jiffies;
+	struct miscdevice jpeg_miscdev;
+	char jpeg_dev_name[48];
+	bool jpeg_misc_registered;
+
+	/* Pre-allocated staging buffer for raw frame sends */
+	u8 *video_staging;
+	size_t video_staging_size;
+
+	/* Pre-allocated staging buffer for JPEG frame sends */
+	u8 *jpeg_staging;
+	size_t jpeg_staging_size;
+
+	/* Keepalive for monitor stability */
+	struct timer_list keepalive_timer;
+	u8 *last_jpeg_data;
+	size_t last_jpeg_len;
+};
 
 /*
  * Per-device state.
@@ -114,23 +157,26 @@ struct t6_device {
 	struct usb_interface *intf;
 	struct device *dmadev;
 
-	/* Display info */
+	/* Shared chip info */
 	u32 ram_mb;
-	u32 fb_addr;		/* framebuffer address in T6 VRAM */
-	int width, height;
-	char monitor_name[16];
-	int frame_seq;
+	struct t6_head heads[T6_OUTPUT_COUNT];
 
-	/* Cached EDID (read at probe, served from memory) */
-	u8 edid_data[256];
-	int edid_len;
+	/* Serialize frame staging and USB submission across both heads. */
+	struct work_struct tx_work;
+	struct work_struct keepalive_work;
+	struct delayed_work tx_defer_work;
+	struct delayed_work reprobe_work;
+	struct mutex tx_lock;
+	struct mutex io_lock;
+	unsigned int tx_next_head;
+	unsigned int reprobe_attempt;
+	bool manual_only;
+	bool io_faulted;
+	atomic_t tx_sending;
+	int io_last_error;
 
-	/* URB pool for async frame sending */
-	struct t6_urb_pool urbs;
-
-	/* DRM objects */
-	struct drm_simple_display_pipe pipe;
-	struct drm_connector connector;
+	/* Pre-allocated USB bulk transfer chunk buffer */
+	u8 *bulk_chunk;
 };
 
 static inline struct t6_device *to_t6(struct drm_device *drm)
@@ -138,13 +184,40 @@ static inline struct t6_device *to_t6(struct drm_device *drm)
 	return container_of(drm, struct t6_device, drm);
 }
 
-/* connector */
-int t6_connector_init(struct t6_device *t6);
+static inline struct t6_head *t6_get_head(struct t6_device *t6,
+					       unsigned int idx)
+{
+	return &t6->heads[idx];
+}
 
-/* URB pool */
-int t6_alloc_urb_list(struct t6_device *t6, int count, size_t buf_size);
-void t6_free_urb_list(struct t6_device *t6);
-struct urb *t6_get_urb(struct t6_device *t6);
-int t6_submit_urb(struct t6_device *t6, struct urb *urb, size_t len);
+static inline struct t6_head *t6_head_from_pipe(struct drm_simple_display_pipe *pipe)
+{
+	return container_of(pipe, struct t6_head, pipe);
+}
+
+static inline struct t6_head *t6_head_from_connector(struct drm_connector *connector)
+{
+	return container_of(connector, struct t6_head, connector);
+}
+
+static inline bool t6_head_scanout_supported(const struct t6_head *head)
+{
+	return head->transport == T6_HEAD_TRANSPORT_RAW;
+}
+
+static inline bool t6_head_drm_scanout_enabled(const struct t6_head *head)
+{
+	return t6_head_scanout_supported(head) && !head->t6->manual_only;
+}
+
+static inline bool t6_head_runtime_connected(const struct t6_head *head)
+{
+	return READ_ONCE(head->connected) &&
+	       t6_head_drm_scanout_enabled(head) &&
+	       !READ_ONCE(head->t6->io_faulted);
+}
+
+/* connector */
+int t6_connector_init(struct t6_device *t6, struct t6_head *head);
 
 #endif

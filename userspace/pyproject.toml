@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mct-t6-display"
+version = "0.4.5"
+description = "Userspace driver for MCT Trigger 6 USB display adapters"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "Ralph Friedman" }
+]
+keywords = ["usb", "display", "wayland", "mct", "trigger6", "linux"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications",
+  "Environment :: X11 Applications :: GTK",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: System :: Hardware :: Hardware Drivers",
+  "Topic :: System :: Systems Administration",
+]
+dependencies = [
+  "Pillow>=10.0",
+  "pyusb>=1.2.1",
+]
+
+[project.optional-dependencies]
+portal = ["PyGObject>=3.46"]
+
+[project.scripts]
+mct-t6-display = "mct_t6_display:main"
+mct-t6-install-user-service = "mct_t6_display:install_user_service_main"
+mct-t6-recover-output1 = "recover_output1:main"
+mct-t6-benchmark-output1 = "benchmark_output1_jpeg:main"
+mct-t6-feed-output1 = "feed_output1_jpeg:main"
+
+[tool.setuptools]
+py-modules = ["mct_t6_display", "recover_output1", "benchmark_output1_jpeg", "feed_output1_jpeg"]

@@ -1,0 +1,318 @@
+== uname -a ==
+Linux asus-zenbook 6.18.7-76061807-generic #202601231045~1769703228~24.04~cb87b5b SMP PREEMPT_DYNAMIC Thu J x86_64 x86_64 x86_64 GNU/Linux
+
+== lsmod | grep trigger6 ==
+trigger6               32768  2
+
+== lsusb -d 0711:5601 ==
+Bus 006 Device 003: ID 0711:5601 Magic Control Technology Corp. T6 USB Station
+Bus 006 Device 004: ID 0711:5601 Magic Control Technology Corp. T6 USB Station
+
+== trigger6-backed DRM outputs ==
+
+== trigger6 device nodes ==
+/dev/trigger6-006-003-out1-jpeg
+
+== trigger6 open file descriptors ==
+
+== recent dmesg ==
+[    2.532344] input: Video Bus as /devices/LNXSYSTM:00/LNXSYBUS:00/PNP0A08:00/device:13/LNXVIDEO:01/input/input42
+[    2.580918] fbcon: i915drmfb (fb0) is primary device
+[    2.580921] fbcon: Deferring console take-over
+[    2.580924] i915 0000:00:02.0: [drm] fb0: i915drmfb frame buffer device
+[    2.593468] input: ELAN9009:00 04F3:29A1 as /devices/pci0000:00/0000:00:15.3/i2c_designware.3/i2c-3/i2c-ELAN9009:00/0018:04F3:29A1.0004/input/input43
+[    2.593517] input: ELAN9009:00 04F3:29A1 UNKNOWN as /devices/pci0000:00/0000:00:15.3/i2c_designware.3/i2c-3/i2c-ELAN9009:00/0018:04F3:29A1.0004/input/input44
+[    2.593542] input: ELAN9009:00 04F3:29A1 UNKNOWN as /devices/pci0000:00/0000:00:15.3/i2c_designware.3/i2c-3/i2c-ELAN9009:00/0018:04F3:29A1.0004/input/input45
+[    2.593578] input: ELAN9009:00 04F3:29A1 Stylus as /devices/pci0000:00/0000:00:15.3/i2c_designware.3/i2c-3/i2c-ELAN9009:00/0018:04F3:29A1.0004/input/input46
+[    2.593619] input: ELAN9009:00 04F3:29A1 UNKNOWN as /devices/pci0000:00/0000:00:15.3/i2c_designware.3/i2c-3/i2c-ELAN9009:00/0018:04F3:29A1.0004/input/input48
+[    2.593644] input: ELAN9009:00 04F3:29A1 UNKNOWN as /devices/pci0000:00/0000:00:15.3/i2c_designware.3/i2c-3/i2c-ELAN9009:00/0018:04F3:29A1.0004/input/input49
+[    2.593672] input: ELAN9009:00 04F3:29A1 UNKNOWN as /devices/pci0000:00/0000:00:15.3/i2c_designware.3/i2c-3/i2c-ELAN9009:00/0018:04F3:29A1.0004/input/input50
+[    2.643599] hid-multitouch 0018:04F3:29A1.0004: input,hidraw3: I2C HID v1.00 Device [ELAN9009:00 04F3:29A1] on i2c-ELAN9009:00
+[    2.658861] usb 1-14: New USB device found, idVendor=8087, idProduct=0026, bcdDevice= 0.02
+[    2.658872] usb 1-14: New USB device strings: Mfr=0, Product=0, SerialNumber=0
+[    2.724183] input: ELAN1406:00 04F3:3101 Mouse as /devices/pci0000:00/0000:00:15.1/i2c_designware.1/i2c-1/i2c-ELAN1406:00/0018:04F3:3101.000A/input/input52
+[    2.724273] input: ELAN1406:00 04F3:3101 Touchpad as /devices/pci0000:00/0000:00:15.1/i2c_designware.1/i2c-1/i2c-ELAN1406:00/0018:04F3:3101.000A/input/input53
+[    2.724319] input: ELAN1406:00 04F3:3101 Keyboard as /devices/pci0000:00/0000:00:15.1/i2c_designware.1/i2c-1/i2c-ELAN1406:00/0018:04F3:3101.000A/input/input54
+[    2.725964] hid-multitouch 0018:04F3:3101.000A: input,hidraw9: I2C HID v1.00 Mouse [ELAN1406:00 04F3:3101] on i2c-ELAN1406:00
+[    2.760300] system76: Model does not utilize this driver
+[    2.796901] usbcore: registered new interface driver system76-io
+[    2.822697] raid6: avx2x4   gen() 48263 MB/s
+[    2.839762] raid6: avx2x2   gen() 50367 MB/s
+[    2.856757] raid6: avx2x1   gen() 40658 MB/s
+[    2.856758] raid6: using algorithm avx2x2 gen() 50367 MB/s
+[    2.873760] raid6: .... xor() 29253 MB/s, rmw enabled
+[    2.873761] raid6: using avx2x2 recovery algorithm
+[    2.875181] xor: automatically using best checksumming function   avx       
+[    2.875922] async_tx: api initialized (async)
+[    9.374956] EXT4-fs (dm-1): mounted filesystem 7381d30c-1bbd-4a72-8dc7-36a57157b084 ro with ordered data mode. Quota mode: none.
+[    9.477640] systemd[1]: Inserted module 'autofs4'
+[    9.499064] systemd[1]: systemd 255.4-1ubuntu8.12pop0~1769790828~24.04~d4491c0 running in system mode (+PAM +AUDIT +SELINUX +APPARMOR +IMA +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBFDISK +PCRE2 -PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD -BPF_FRAMEWORK -XKBCOMMON +UTMP +SYSVINIT default-hierarchy=unified)
+[    9.499068] systemd[1]: Detected architecture x86-64.
+[    9.499609] systemd[1]: Hostname set to <asus-zenbook>.
+[    9.652883] systemd[1]: Queued start job for default target graphical.target.
+[    9.666086] systemd[1]: Created slice system-modprobe.slice - Slice /system/modprobe.
+[    9.666292] systemd[1]: Created slice system-systemd\x2dcryptsetup.slice - Encrypted Volume Units Service Slice.
+[    9.666426] systemd[1]: Created slice user.slice - User and Session Slice.
+[    9.666463] systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+[    9.666559] systemd[1]: Set up automount proc-sys-fs-binfmt_misc.automount - Arbitrary Executable File Formats File System Automount Point.
+[    9.666571] systemd[1]: Expecting device dev-disk-by\x2dpartuuid-1d3570d6\x2d3095\x2d47da\x2db8f8\x2d5c031f87d172.device - /dev/disk/by-partuuid/1d3570d6-3095-47da-b8f8-5c031f87d172...
+[    9.666575] systemd[1]: Expecting device dev-disk-by\x2dpartuuid-a5075388\x2d7b33\x2d4712\x2d9430\x2d762a3d05ccb3.device - /dev/disk/by-partuuid/a5075388-7b33-4712-9430-762a3d05ccb3...
+[    9.666579] systemd[1]: Expecting device dev-disk-by\x2duuid-3a6bf0c1\x2da44b\x2d40b7\x2dbff8\x2dbcda5ab84fc0.device - /dev/disk/by-uuid/3a6bf0c1-a44b-40b7-bff8-bcda5ab84fc0...
+[    9.666582] systemd[1]: Expecting device dev-disk-by\x2duuid-71723688\x2d87ca\x2d4da6\x2d9010\x2d0f95b1034797.device - /dev/disk/by-uuid/71723688-87ca-4da6-9010-0f95b1034797...
+[    9.666587] systemd[1]: Expecting device dev-mapper-cryptswap.device - /dev/mapper/cryptswap...
+[    9.666601] systemd[1]: Reached target integritysetup.target - Local Integrity Protected Volumes.
+[    9.666617] systemd[1]: Reached target nss-user-lookup.target - User and Group Name Lookups.
+[    9.666623] systemd[1]: Reached target remote-fs.target - Remote File Systems.
+[    9.666628] systemd[1]: Reached target slices.target - Slice Units.
+[    9.666640] systemd[1]: Reached target time-set.target - System Time Set.
+[    9.666658] systemd[1]: Reached target veritysetup.target - Local Verity Protected Volumes.
+[    9.666715] systemd[1]: Listening on dm-event.socket - Device-mapper event daemon FIFOs.
+[    9.666894] systemd[1]: Listening on lvm2-lvmpolld.socket - LVM2 poll daemon socket.
+[    9.666953] systemd[1]: Listening on syslog.socket - Syslog Socket.
+[    9.667003] systemd[1]: Listening on systemd-fsckd.socket - fsck to fsckd communication Socket.
+[    9.667035] systemd[1]: Listening on systemd-initctl.socket - initctl Compatibility Named Pipe.
+[    9.667089] systemd[1]: Listening on systemd-journald-dev-log.socket - Journal Socket (/dev/log).
+[    9.667151] systemd[1]: Listening on systemd-journald.socket - Journal Socket.
+[    9.667179] systemd[1]: systemd-pcrextend.socket - TPM2 PCR Extension (Varlink) was skipped because of an unmet condition check (ConditionSecurity=measured-uki).
+[    9.667245] systemd[1]: Listening on systemd-udevd-control.socket - udev Control Socket.
+[    9.667299] systemd[1]: Listening on systemd-udevd-kernel.socket - udev Kernel Socket.
+[    9.667868] systemd[1]: Mounting dev-hugepages.mount - Huge Pages File System...
+[    9.668274] systemd[1]: Mounting dev-mqueue.mount - POSIX Message Queue File System...
+[    9.668653] systemd[1]: Mounting sys-kernel-debug.mount - Kernel Debug File System...
+[    9.669043] systemd[1]: Mounting sys-kernel-tracing.mount - Kernel Trace File System...
+[    9.670494] systemd[1]: Starting systemd-journald.service - Journal Service...
+[    9.670551] systemd[1]: Finished blk-availability.service - Availability of block devices.
+[    9.671163] systemd[1]: Starting keyboard-setup.service - Set the console keyboard layout...
+[    9.671626] systemd[1]: Starting kmod-static-nodes.service - Create List of Static Device Nodes...
+[    9.672060] systemd[1]: Starting lvm2-monitor.service - Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling...
+[    9.672506] systemd[1]: Starting modprobe@configfs.service - Load Kernel Module configfs...
+[    9.673005] systemd[1]: Starting modprobe@dm_mod.service - Load Kernel Module dm_mod...
+[    9.673464] systemd[1]: Starting modprobe@drm.service - Load Kernel Module drm...
+[    9.673952] systemd[1]: Starting modprobe@efi_pstore.service - Load Kernel Module efi_pstore...
+[    9.674652] systemd[1]: Starting modprobe@fuse.service - Load Kernel Module fuse...
+[    9.675363] systemd[1]: Starting modprobe@loop.service - Load Kernel Module loop...
+[    9.675492] systemd[1]: systemd-fsck-root.service - File System Check on Root Device was skipped because of an unmet condition check (ConditionPathExists=!/run/initramfs/fsck-root).
+[    9.676568] systemd[1]: Starting systemd-modules-load.service - Load Kernel Modules...
+[    9.676581] systemd[1]: systemd-pcrmachine.service - TPM2 PCR Machine ID Measurement was skipped because of an unmet condition check (ConditionSecurity=measured-uki).
+[    9.677172] systemd[1]: Starting systemd-remount-fs.service - Remount Root and Kernel File Systems...
+[    9.677198] systemd[1]: systemd-tpm2-setup-early.service - TPM2 SRK Setup (Early) was skipped because of an unmet condition check (ConditionSecurity=measured-uki).
+[    9.677653] systemd[1]: Starting systemd-udev-trigger.service - Coldplug All udev Devices...
+[    9.678751] systemd[1]: Mounted dev-hugepages.mount - Huge Pages File System.
+[    9.678822] pstore: Using crash dump compression: deflate
+[    9.678886] systemd[1]: Mounted dev-mqueue.mount - POSIX Message Queue File System.
+[    9.678976] systemd[1]: Mounted sys-kernel-debug.mount - Kernel Debug File System.
+[    9.679061] systemd[1]: Mounted sys-kernel-tracing.mount - Kernel Trace File System.
+[    9.679248] systemd[1]: Finished kmod-static-nodes.service - Create List of Static Device Nodes.
+[    9.679481] systemd[1]: modprobe@configfs.service: Deactivated successfully.
+[    9.679614] systemd[1]: Finished modprobe@configfs.service - Load Kernel Module configfs.
+[    9.679847] systemd[1]: modprobe@dm_mod.service: Deactivated successfully.
+[    9.679975] systemd[1]: Finished modprobe@dm_mod.service - Load Kernel Module dm_mod.
+[    9.680191] systemd[1]: modprobe@drm.service: Deactivated successfully.
+[    9.680307] systemd[1]: Finished modprobe@drm.service - Load Kernel Module drm.
+[    9.680521] systemd[1]: modprobe@fuse.service: Deactivated successfully.
+[    9.680641] systemd[1]: Finished modprobe@fuse.service - Load Kernel Module fuse.
+[    9.680800] systemd[1]: modprobe@loop.service: Deactivated successfully.
+[    9.680877] systemd[1]: Finished modprobe@loop.service - Load Kernel Module loop.
+[    9.681442] systemd[1]: Mounting sys-fs-fuse-connections.mount - FUSE Control File System...
+[    9.681929] systemd[1]: Mounting sys-kernel-config.mount - Kernel Configuration File System...
+[    9.681934] systemd-journald[546]: Collecting audit messages is disabled.
+[    9.681971] systemd[1]: systemd-repart.service - Repartition Root Disk was skipped because no trigger condition checks were met.
+[    9.682703] systemd[1]: Starting systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully...
+[    9.684857] systemd[1]: Mounted sys-fs-fuse-connections.mount - FUSE Control File System.
+[    9.685677] systemd[1]: Mounted sys-kernel-config.mount - Kernel Configuration File System.
+[    9.686336] pstore: Registered efi_pstore as persistent store backend
+[    9.686780] systemd[1]: modprobe@efi_pstore.service: Deactivated successfully.
+[    9.686902] systemd[1]: Finished modprobe@efi_pstore.service - Load Kernel Module efi_pstore.
+[    9.687009] lp: driver loaded but no devices found
+[    9.689237] ppdev: user-space parallel port driver
+[    9.693723] EXT4-fs (dm-1): re-mounted 7381d30c-1bbd-4a72-8dc7-36a57157b084 r/w.
+[    9.694401] systemd[1]: Finished systemd-remount-fs.service - Remount Root and Kernel File Systems.
+[    9.694772] systemd[1]: systemd-hwdb-update.service - Rebuild Hardware Database was skipped because of an unmet condition check (ConditionNeedsUpdate=/etc).
+[    9.694796] systemd[1]: systemd-pstore.service - Platform Persistent Storage Archival was skipped because of an unmet condition check (ConditionDirectoryNotEmpty=/sys/fs/pstore).
+[    9.695297] systemd[1]: Starting systemd-random-seed.service - Load/Save OS Random Seed...
+[    9.695308] systemd[1]: systemd-tpm2-setup.service - TPM2 SRK Setup was skipped because of an unmet condition check (ConditionSecurity=measured-uki).
+[    9.695490] systemd[1]: Finished systemd-tmpfiles-setup-dev-early.service - Create Static Device Nodes in /dev gracefully.
+[    9.695569] systemd[1]: systemd-sysusers.service - Create System Users was skipped because no trigger condition checks were met.
+[    9.696018] systemd[1]: Starting systemd-tmpfiles-setup-dev.service - Create Static Device Nodes in /dev...
+[    9.702074] systemd[1]: Finished systemd-tmpfiles-setup-dev.service - Create Static Device Nodes in /dev.
+[    9.702734] systemd[1]: Starting systemd-udevd.service - Rule-based Manager for Device Events and Files...
+[    9.703665] systemd[1]: Finished keyboard-setup.service - Set the console keyboard layout.
+[    9.704221] io scheduler kyber registered
+[    9.704684] systemd[1]: Finished systemd-modules-load.service - Load Kernel Modules.
+[    9.705277] systemd[1]: Starting systemd-sysctl.service - Apply Kernel Variables...
+[    9.706411] systemd[1]: Finished systemd-random-seed.service - Load/Save OS Random Seed.
+[    9.714714] systemd[1]: Finished systemd-sysctl.service - Apply Kernel Variables.
+[    9.721987] systemd[1]: Started systemd-journald.service - Journal Service.
+[    9.726938] systemd-journald[546]: Received client request to flush runtime journal.
+[    9.734139] systemd-journald[546]: /var/log/journal/06a855d5c03a36d6da19ad4469cd6f3e/system.journal: Journal file uses a different sequence number ID, rotating.
+[    9.734142] systemd-journald[546]: Rotating system journal.
+[    9.834888] ACPI BIOS Error (bug): Could not resolve symbol [\DPPP], AE_NOT_FOUND (20250807/psargs-332)
+
+[    9.834898] No Local Variables are initialized for Method [IDSP]
+
+[    9.834900] No Arguments are initialized for method [IDSP]
+
+[    9.834902] ACPI Error: Aborting method \_SB.IETM.IDSP due to previous error (AE_NOT_FOUND) (20250807/psparse-529)
+[    9.834916] ACPI Warning: \_SB.IETM._TRT: Return Package has no elements (empty) (20250807/nsprepkg-94)
+[    9.894268] Serial bus multi instantiate pseudo device driver INT3515:00: error -ENXIO: IRQ index 1 not found
+[    9.894275] Serial bus multi instantiate pseudo device driver INT3515:00: error -ENXIO: Error requesting irq at index 1
+[    9.895250] nvidia-gpu 0000:01:00.3: enabling device (0000 -> 0002)
+[    9.896468] intel_pch_thermal 0000:00:12.0: enabling device (0000 -> 0002)
+[    9.898816] intel_pmc_core INT33A1:00:  initialized
+[    9.915942] mc: Linux media interface: v0.10
+[    9.941188] Bluetooth: Core ver 2.22
+[    9.973758] NET: Registered PF_BLUETOOTH protocol family
+[    9.973761] Bluetooth: HCI device and connection manager initialized
+[    9.973765] Bluetooth: HCI socket layer initialized
+[    9.973768] Bluetooth: L2CAP socket layer initialized
+[    9.973775] Bluetooth: SCO socket layer initialized
+[    9.975624] mei_me 0000:00:16.0: enabling device (0000 -> 0002)
+[    9.975827] FAT-fs (nvme0n1p1): Volume was not properly unmounted. Some data may be corrupt. Please run fsck.
+[    9.976088] FAT-fs (nvme0n1p2): Volume was not properly unmounted. Some data may be corrupt. Please run fsck.
+[    9.976775] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    9.976961] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    9.977076] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    9.977719] videodev: Linux video capture interface: v2.00
+[    9.978542] i801_smbus 0000:00:1f.4: SPD Write Disable is set
+[    9.978557] i801_smbus 0000:00:1f.4: SMBus using PCI interrupt
+[    9.988273] asus_wmi: ASUS WMI generic driver loaded
+[    9.990302] RAPL PMU: API unit is 2^-32 Joules, 5 fixed counters, 655360 ms ovfl timer
+[    9.990305] RAPL PMU: hw unit of domain pp0-core 2^-14 Joules
+[    9.990307] RAPL PMU: hw unit of domain package 2^-14 Joules
+[    9.990307] RAPL PMU: hw unit of domain dram 2^-14 Joules
+[    9.990308] RAPL PMU: hw unit of domain pp1-gpu 2^-14 Joules
+[    9.990309] RAPL PMU: hw unit of domain psys 2^-14 Joules
+[    9.990918] asus_wmi: Initialization: 0x1
+[    9.990977] asus_wmi: BIOS WMI version: 9.0
+[    9.991015] asus_wmi: SFUN value: 0x21
+[    9.991019] asus-nb-wmi asus-nb-wmi: Detected ATK, not ASUSWMI, use DSTS
+[   10.003736] input: Asus WMI hotkeys as /devices/platform/asus-nb-wmi/input/input55
+[   10.008824] iwlwifi 0000:00:14.3: enabling device (0000 -> 0002)
+[   10.016732] audit: type=1400 audit(1775410140.985:2): apparmor="STATUS" operation="profile_load" profile="unconfined" name="Discord" pid=842 comm="apparmor_parser"
+[   10.016737] audit: type=1400 audit(1775410140.985:3): apparmor="STATUS" operation="profile_load" profile="unconfined" name="QtWebEngineProcess" pid=844 comm="apparmor_parser"
+[   10.016739] audit: type=1400 audit(1775410140.985:4): apparmor="STATUS" operation="profile_load" profile="unconfined" name="buildah" pid=848 comm="apparmor_parser"
+[   10.016741] audit: type=1400 audit(1775410140.985:5): apparmor="STATUS" operation="profile_load" profile="unconfined" name=4D6F6E676F444220436F6D70617373 pid=843 comm="apparmor_parser"
+[   10.016744] audit: type=1400 audit(1775410140.986:6): apparmor="STATUS" operation="profile_load" profile="unconfined" name="ch-run" pid=854 comm="apparmor_parser"
+[   10.016746] audit: type=1400 audit(1775410140.986:7): apparmor="STATUS" operation="profile_load" profile="unconfined" name="balena-etcher" pid=846 comm="apparmor_parser"
+[   10.016785] audit: type=1400 audit(1775410140.986:8): apparmor="STATUS" operation="profile_load" profile="unconfined" name="busybox" pid=849 comm="apparmor_parser"
+[   10.016974] audit: type=1400 audit(1775410140.986:9): apparmor="STATUS" operation="profile_load" profile="unconfined" name="ch-checkns" pid=853 comm="apparmor_parser"
+[   10.016997] audit: type=1400 audit(1775410140.986:10): apparmor="STATUS" operation="profile_load" profile="unconfined" name="crun" pid=857 comm="apparmor_parser"
+[   10.017018] audit: type=1400 audit(1775410140.986:11): apparmor="STATUS" operation="profile_load" profile="unconfined" name="cam" pid=852 comm="apparmor_parser"
+[   10.017797] proc_thermal 0000:00:04.0: enabling device (0000 -> 0002)
+[   10.024747] intel_rapl_common: Found RAPL domain package
+[   10.024751] intel_rapl_common: Found RAPL domain dram
+[   10.028520] iwlwifi 0000:00:14.3: Detected crf-id 0x3617, cnv-id 0x20000302 wfpm id 0x80000000
+[   10.028539] iwlwifi 0000:00:14.3: PCI dev 06f0/0074, rev=0x351, rfid=0x10a100
+[   10.028542] iwlwifi 0000:00:14.3: Detected Intel(R) Wi-Fi 6 AX201 160MHz
+[   10.034722] usbcore: registered new interface driver btusb
+[   10.038181] iwlwifi 0000:00:14.3: loaded firmware version 77.2753b721.0 QuZ-a0-hr-b0-77.ucode op_mode iwlmvm
+[   10.043939] Bluetooth: hci0: Found device firmware: intel/ibt-19-0-4.sfi
+[   10.044092] Bluetooth: hci0: Boot Address: 0x24800
+[   10.044094] Bluetooth: hci0: Firmware Version: 132-3.24
+[   10.044096] Bluetooth: hci0: Firmware already loaded
+[   10.048235] Bluetooth: hci0: HCI LE Coded PHY feature bit is set, but its usage is not supported.
+[   10.074279] Adding 4193784k swap on /dev/mapper/cryptswap.  Priority:-2 extents:1 across:4193784k SS
+[   10.080411] intel_rapl_common: Found RAPL domain package
+[   10.080414] intel_rapl_common: Found RAPL domain core
+[   10.080415] intel_rapl_common: Found RAPL domain uncore
+[   10.080417] intel_rapl_common: Found RAPL domain dram
+[   10.080418] intel_rapl_common: Found RAPL domain psys
+[   10.080790] uvcvideo 1-9:1.0: Found UVC 1.10 device USB2.0 HD UVC WebCam (13d3:56eb)
+[   10.081742] mei_hdcp 0000:00:16.0-b638ab7e-94e2-4ea2-a552-d1c54b627f04: bound 0000:00:02.0 (ops i915_hdcp_ops [i915])
+[   10.084649] spi-nor spi0.0: supply vcc not found, using dummy regulator
+[   10.084794] uvcvideo 1-9:1.2: Found UVC 1.50 device USB2.0 HD UVC WebCam (13d3:56eb)
+[   10.085328] usbcore: registered new interface driver uvcvideo
+[   10.089736] Creating 1 MTD partitions on "0000:00:1f.5":
+[   10.089743] 0x000000000000-0x000001000000 : "BIOS"
+[   10.102672] snd_hda_intel 0000:00:1f.3: enabling device (0000 -> 0002)
+[   10.102906] snd_hda_intel 0000:00:1f.3: bound 0000:00:02.0 (ops intel_audio_component_bind_ops [i915])
+[   10.103157] snd_hda_intel 0000:01:00.1: enabling device (0000 -> 0002)
+[   10.103249] snd_hda_intel 0000:01:00.1: Disabling MSI
+[   10.103258] snd_hda_intel 0000:01:00.1: Handle vga_switcheroo audio client
+[   10.163268] input: HDA NVidia HDMI/DP,pcm=3 as /devices/pci0000:00/0000:00:01.0/0000:01:00.1/sound/card1/input56
+[   10.164680] snd_hda_codec_alc269 hdaudioC0D0: ALC295: picked fixup  for PCI SSID 1043:19e1
+[   10.165266] snd_hda_codec_alc269 hdaudioC0D0: autoconfig for ALC295: line_outs=1 (0x17/0x0/0x0/0x0/0x0) type:speaker
+[   10.165269] snd_hda_codec_alc269 hdaudioC0D0:    speaker_outs=0 (0x0/0x0/0x0/0x0/0x0)
+[   10.165270] snd_hda_codec_alc269 hdaudioC0D0:    hp_outs=1 (0x21/0x0/0x0/0x0/0x0)
+[   10.165271] snd_hda_codec_alc269 hdaudioC0D0:    mono: mono_out=0x0
+[   10.165272] snd_hda_codec_alc269 hdaudioC0D0:    inputs:
+[   10.165273] snd_hda_codec_alc269 hdaudioC0D0:      Internal Mic=0x12
+[   10.165274] snd_hda_codec_alc269 hdaudioC0D0:      Internal Mic=0x13
+[   10.165275] snd_hda_codec_alc269 hdaudioC0D0:      Headset Mic=0x19
+[   10.165389] intel_tcc_cooling: Programmable TCC Offset detected
+[   10.173890] input: HDA NVidia HDMI/DP,pcm=7 as /devices/pci0000:00/0000:00:01.0/0000:01:00.1/sound/card1/input57
+[   10.213450] input: HDA NVidia HDMI/DP,pcm=8 as /devices/pci0000:00/0000:00:01.0/0000:01:00.1/sound/card1/input58
+[   10.215129] input: HDA NVidia HDMI/DP,pcm=9 as /devices/pci0000:00/0000:00:01.0/0000:01:00.1/sound/card1/input59
+[   10.215205] asus_wmi: fan_curve_get_factory_default (0x00110024) failed: -19
+[   10.215391] asus_wmi: fan_curve_get_factory_default (0x00110025) failed: -19
+[   10.215583] asus_wmi: fan_curve_get_factory_default (0x00110032) failed: -19
+[   10.216157] asus_wmi: using asus-wmi for asus::kbd_backlight
+[   10.273422] ACPI: battery: new hook: ASUS Battery Extension
+[   10.336517] iwlwifi 0000:00:14.3: Detected RF HR B3, rfid=0x10a100
+[   10.402828] iwlwifi 0000:00:14.3: base HW address: cc:d9:ac:50:bc:98
+[   10.434545] iwlwifi 0000:00:14.3 wlo1: renamed from wlan0
+[   10.864963] zram: Added device: zram0
+[   10.866786] Bluetooth: BNEP (Ethernet Emulation) ver 1.3
+[   10.866789] Bluetooth: BNEP filters: protocol multicast
+[   10.866792] Bluetooth: BNEP socket layer initialized
+[   10.868350] Bluetooth: MGMT ver 1.23
+[   10.871494] NET: Registered PF_ALG protocol family
+[   10.902943] nvme nvme0: using unchecked data buffer
+[   10.950482] NET: Registered PF_QIPCRTR protocol family
+[   11.036916] input: HDA Intel PCH Headphone as /devices/pci0000:00/0000:00:1f.3/sound/card0/input60
+[   11.036974] input: HDA Intel PCH HDMI/DP,pcm=3 as /devices/pci0000:00/0000:00:1f.3/sound/card0/input61
+[   11.037018] input: HDA Intel PCH HDMI/DP,pcm=7 as /devices/pci0000:00/0000:00:1f.3/sound/card0/input62
+[   11.037053] input: HDA Intel PCH HDMI/DP,pcm=8 as /devices/pci0000:00/0000:00:1f.3/sound/card0/input63
+[   11.084709] nvidia-gpu 0000:01:00.3: i2c timeout error e0000000
+[   11.084714] ucsi_ccg 13-0008: i2c_transfer failed -110
+[   11.084741] ucsi_ccg 13-0008: ucsi_ccg_init failed - -110
+[   11.084748] ucsi_ccg 13-0008: probe with driver ucsi_ccg failed with error -110
+[   11.093949] zram0: detected capacity change from 0 to 33554432
+[   11.106985] Adding 16777212k swap on /dev/zram0.  Priority:1000 extents:1 across:16777212k SS
+[   11.565667] ACPI BIOS Error (bug): Could not resolve symbol [\DPPP], AE_NOT_FOUND (20250807/psargs-332)
+[   11.565675] fbcon: Taking over console
+
+[   11.565682] No Local Variables are initialized for Method [IDSP]
+
+[   11.565683] No Arguments are initialized for method [IDSP]
+
+[   11.565685] ACPI Error: Aborting method \_SB.IETM.IDSP due to previous error (AE_NOT_FOUND) (20250807/psparse-529)
+[   11.565691] ACPI Error: Aborting method \_SB.IETM._OSC due to previous error (AE_NOT_FOUND) (20250807/psparse-529)
+[   11.565744] Consider using thermal netlink events interface
+[   11.585540] Console: switching to colour frame buffer device 240x34
+[   12.091009] Bluetooth: RFCOMM TTY layer initialized
+[   12.091014] Bluetooth: RFCOMM socket layer initialized
+[   12.091019] Bluetooth: RFCOMM ver 1.11
+[   15.184434] wlo1: authenticate with 26:00:ab:c0:37:c3 (local address=cc:d9:ac:50:bc:98)
+[   15.185983] wlo1: send auth to 26:00:ab:c0:37:c3 (try 1/3)
+[   15.214523] wlo1: authenticated
+[   15.215726] wlo1: associate with 26:00:ab:c0:37:c3 (try 1/3)
+[   15.219506] wlo1: RX AssocResp from 26:00:ab:c0:37:c3 (capab=0x511 status=0 aid=45)
+[   15.219542] wlo1: AP has invalid WMM params (AIFSN=1 for ACI 2), will use 2
+[   15.219547] wlo1: AP has invalid WMM params (AIFSN=1 for ACI 3), will use 2
+[   15.231548] wlo1: associated
+[   15.296152] wlo1: Limiting TX power to 30 (30 - 0) dBm as advertised by 26:00:ab:c0:37:c3
+[   15.658018] systemd-journald[546]: /var/log/journal/06a855d5c03a36d6da19ad4469cd6f3e/user-1000.journal: Journal file uses a different sequence number ID, rotating.
+[   63.641990] input: LIFT Mouse as /devices/virtual/misc/uhid/0005:046D:B031.000B/input/input64
+[   63.642226] hid-generic 0005:046D:B031.000B: input,hidraw10: BLUETOOTH HID v0.11 Mouse [LIFT] on cc:d9:ac:50:bc:9c
+[   90.920601] warning: `ThreadPoolForeg' uses wireless extensions which will stop working for Wi-Fi 7 hardware; use nl80211
+[  228.200163] usbcore: registered new interface driver trigger6
+[  228.255000] trigger6 6-1.1:1.0: T6 RAM: 58 MB
+[  228.255963] usb 6-1.1: Head 0: QG241Y (1920x1080) transport=raw scanout=manual-only fb=0x01c00000 cmd=0x00000000 cmd-cursor=0x00000000
+[  228.255966] usb 6-1.1: Head 0 is in manual-only mode; DRM connectors stay disconnected until the module is reloaded with manual_only=0
+[  228.255967] usb 6-1.1: Head 1: K272HL (1920x1080) transport=user-jpeg scanout=manual-only fb=0x02e00000 cmd=0x02800000 cmd-cursor=0x02800000
+[  228.255969] usb 6-1.1: Head 1 is in manual-only mode; DRM connectors stay disconnected until the module is reloaded with manual_only=0
+[  228.411994] trigger6 6-1.1:1.0: secondary_userspace_jpeg=1 requires a userspace feeder to write JPEG frames into /dev/trigger6-*-out1-jpeg for logical output 1
+[  228.412007] trigger6 6-1.1:1.0: manual_only=1 keeps DRM connectors disconnected and blocks automatic scanout; use this for the safest guarded live probes
+[  228.412352] usb 6-1.1: Registered userspace JPEG injection device /dev/trigger6-006-003-out1-jpeg for output 1
+[  228.412915] [drm] Initialized trigger6 1.0.0 for 6-1.1:1.0 on minor 2
+[  228.412925] trigger6 6-1.1:1.0: T6 display ready with 2 logical heads modeled
+[  228.413148] usb 6-1.1: authorized to connect
+[  228.434304] trigger6 6-1.2:1.0: T6 RAM: 58 MB
+[  228.435205] usb 6-1.2: Head 0: K272HL (1920x1080) transport=raw scanout=manual-only fb=0x01c00000 cmd=0x00000000 cmd-cursor=0x00000000
+[  228.435209] usb 6-1.2: Head 0 is in manual-only mode; DRM connectors stay disconnected until the module is reloaded with manual_only=0
+[  228.516715] trigger6 6-1.2:1.0: secondary_userspace_jpeg=1 requires a userspace feeder to write JPEG frames into /dev/trigger6-*-out1-jpeg for logical output 1
+[  228.516718] trigger6 6-1.2:1.0: manual_only=1 keeps DRM connectors disconnected and blocks automatic scanout; use this for the safest guarded live probes
+[  228.516891] [drm] Initialized trigger6 1.0.0 for 6-1.2:1.0 on minor 3
+[  228.516893] trigger6 6-1.2:1.0: T6 display ready with 2 logical heads modeled
+[  228.516947] usb 6-1.2: authorized to connect

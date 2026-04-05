@@ -23,7 +23,10 @@
 static enum drm_connector_status
 t6_connector_detect(struct drm_connector *connector, bool force)
 {
-	return connector_status_connected;
+	struct t6_head *head = t6_head_from_connector(connector);
+
+	return t6_head_runtime_connected(head) ?
+		connector_status_connected : connector_status_disconnected;
 }
 
 /*
@@ -32,10 +35,13 @@ t6_connector_detect(struct drm_connector *connector, bool force)
  */
 static int t6_connector_get_modes(struct drm_connector *connector)
 {
-	struct t6_device *t6 = to_t6(connector->dev);
+	struct t6_head *head = t6_head_from_connector(connector);
 	struct drm_display_mode *mode;
 
-	mode = drm_cvt_mode(connector->dev, t6->width, t6->height,
+	if (!t6_head_runtime_connected(head))
+		return 0;
+
+	mode = drm_cvt_mode(connector->dev, head->width, head->height,
 			    60, false, false, false);
 	if (!mode)
 		return 0;
@@ -49,8 +55,7 @@ static int t6_connector_get_modes(struct drm_connector *connector)
  * Reject modes too large for USB bandwidth.
  */
 static enum drm_mode_status
-t6_connector_mode_valid(struct drm_connector *connector,
-			const struct drm_display_mode *mode)
+t6_connector_mode_valid_common(const struct drm_display_mode *mode)
 {
 	if (mode->hdisplay > 1920 || mode->vdisplay > 1200)
 		return MODE_BAD;
@@ -59,9 +64,32 @@ t6_connector_mode_valid(struct drm_connector *connector,
 	return MODE_OK;
 }
 
+static enum drm_mode_status
+t6_connector_mode_valid_mutable(struct drm_connector *connector,
+				struct drm_display_mode *mode)
+{
+	return t6_connector_mode_valid_common(mode);
+}
+
+static enum drm_mode_status
+t6_connector_mode_valid_const(struct drm_connector *connector,
+			      const struct drm_display_mode *mode)
+{
+	return t6_connector_mode_valid_common(mode);
+}
+
+#define T6_CONNECTOR_MODE_VALID \
+	__builtin_choose_expr(\
+		__builtin_types_compatible_p(\
+			typeof(((struct drm_connector_helper_funcs *)0)->mode_valid), \
+			enum drm_mode_status (*)(struct drm_connector *, \
+						 const struct drm_display_mode *)), \
+		t6_connector_mode_valid_const, \
+		t6_connector_mode_valid_mutable)
+
 static const struct drm_connector_helper_funcs t6_conn_helper = {
 	.get_modes = t6_connector_get_modes,
-	.mode_valid = t6_connector_mode_valid,
+	.mode_valid = T6_CONNECTOR_MODE_VALID,
 };
 
 static const struct drm_connector_funcs t6_conn_funcs = {
@@ -73,23 +101,23 @@ static const struct drm_connector_funcs t6_conn_funcs = {
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
 
-int t6_connector_init(struct t6_device *t6)
+int t6_connector_init(struct t6_device *t6, struct t6_head *head)
 {
 	int ret;
 
-	ret = drm_connector_init(&t6->drm, &t6->connector, &t6_conn_funcs,
+	ret = drm_connector_init(&t6->drm, &head->connector, &t6_conn_funcs,
 				 DRM_MODE_CONNECTOR_HDMIA);
 	if (ret)
 		return ret;
 
-	drm_connector_helper_add(&t6->connector, &t6_conn_helper);
+	drm_connector_helper_add(&head->connector, &t6_conn_helper);
 
 	/*
-	 * NO polling. Polling caused system freezes — drm_kms_helper_poll
+	 * NO polling. Polling caused system freezes -- drm_kms_helper_poll
 	 * workqueue takes mode_config.mutex which deadlocks during probe.
 	 * Modes are force-populated in probe via t6_force_modes() instead.
 	 */
-	t6->connector.polled = 0;
+	head->connector.polled = 0;
 
 	return 0;
 }
