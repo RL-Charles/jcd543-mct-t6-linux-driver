@@ -249,11 +249,13 @@ static void t6_jpeg_build_huff(struct t6_jpeg_huff_table *table,
 
 static void t6_jpeg_init_huff_tables(void)
 {
-	if (READ_ONCE(t6_jpeg_huff_ready))
+	/* Fast path after first successful publish of static Huffman tables. */
+	if (smp_load_acquire(&t6_jpeg_huff_ready))
 		return;
 
 	mutex_lock(&t6_jpeg_huff_lock);
-	if (READ_ONCE(t6_jpeg_huff_ready)) {
+	/* Re-check after lock to avoid duplicate table construction races. */
+	if (smp_load_acquire(&t6_jpeg_huff_ready)) {
 		mutex_unlock(&t6_jpeg_huff_lock);
 		return;
 	}
@@ -270,7 +272,8 @@ static void t6_jpeg_init_huff_tables(void)
 	t6_jpeg_build_huff(&t6_jpeg_ac_chroma_table, t6_jpeg_ac_chroma_bits,
 			   t6_jpeg_ac_chroma_vals,
 			   ARRAY_SIZE(t6_jpeg_ac_chroma_vals));
-	WRITE_ONCE(t6_jpeg_huff_ready, true);
+	/* Publish all table writes before exposing the ready flag locklessly. */
+	smp_store_release(&t6_jpeg_huff_ready, true);
 	mutex_unlock(&t6_jpeg_huff_lock);
 }
 
