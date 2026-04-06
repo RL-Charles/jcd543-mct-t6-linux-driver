@@ -1,4 +1,0 @@
-#!/bin/bash
-# Wrapper for the trigger6 JPEG relay daemon.
-# Installed to /usr/local/bin by the install instructions.
-exec python3 /usr/local/share/trigger6/feed_output1_jpeg.py "$@"

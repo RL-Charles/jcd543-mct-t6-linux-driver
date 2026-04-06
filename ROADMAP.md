@@ -38,11 +38,11 @@ Exit criteria:
 
 ### Track 2: Faster Userspace Pipeline
 
-Improve the existing userspace path before attempting a public “fast” claim.
+Improve the existing userspace path where it still matters, while treating native kernel JPEG as the long-term secondary-head architecture.
 
 Priority changes:
 
-1. Replace Pillow JPEG encoding in the secondary path with libjpeg-turbo or TurboJPEG.
+1. Keep the userspace JPEG tools only for offline benchmarking and deliberate hardware recovery, not for normal output-1 scanout.
 2. Split the pipeline into capture, resize, encode, and USB-send stages so one slow step does not stall the whole frame loop.
 3. Move from a single global loop to per-chip workers so the two USB chips can progress independently.
 4. Keep the vendor-style JPEG plus `cmdAddr` path for logical output 1 on both chips.
@@ -80,11 +80,12 @@ Required milestones:
 
 1. Stop the current modeset freeze in the kernel path.
 2. Redesign the kernel driver around both logical outputs per chip, not only the primary path.
-3. Port the working protocol facts from userspace into the kernel path:
+3. Harden and tune the protocol facts already ported from userspace into the kernel path:
    - per-output `0x31` readiness,
    - chip-scoped init,
    - raw full-block layout for primary,
-   - vendor-style JPEG plus `cmdAddr` routing for secondary 1080p.
+   - vendor-style JPEG plus `cmdAddr` routing for secondary 1080p,
+   - native in-kernel JPEG encode for logical output 1.
 4. Expose connectors, CRTCs, and frame delivery in a way compositors can use as real displays.
 5. Add hotplug handling that supports partially populated chips and later-added second outputs.
 
@@ -122,4 +123,4 @@ Recommended artifacts:
 3. Add configurable JPEG quality and subsampling for the secondary path.
 4. Prototype per-chip worker threads in the userspace path.
 5. Debug the current USB/IP data-path failure (`usbip-host` `-71` on busid `6-1.1`) or move guest hardware validation to a host with IOMMU-backed controller passthrough; QEMU `usb-host` and current USB/IP both still stop short of stable real frame traffic.
-6. Rework the kernel driver to model both outputs per chip before attempting another public “proper driver” milestone.
+6. Tune the native kernel JPEG path for higher sustained refresh after correctness and stability are proven.

@@ -35,6 +35,7 @@
 #include <drm/drm_simple_kms_helper.h>
 
 #include "trigger6.h"
+#include "trigger6_jpeg.h"
 
 #define DRIVER_NAME	"trigger6"
 #define DRIVER_DESC	"MCT Trigger 6 USB Display"
@@ -61,6 +62,14 @@ module_param_named(secondary_userspace_jpeg,
 		   0644);
 MODULE_PARM_DESC(secondary_userspace_jpeg,
 		 "Expose logical output 1 through DRM while userspace injects pre-encoded JPEG frames via /dev/trigger6-*-out1-jpeg");
+
+static unsigned int t6_jpeg_quality = T6_JPEG_QUALITY_DEFAULT;
+module_param_named(jpeg_quality,
+		   t6_jpeg_quality,
+		   uint,
+		   0644);
+MODULE_PARM_DESC(jpeg_quality,
+		 "Baseline JPEG quality for logical output 1 when using the native in-kernel encoder (1-100, default 85)");
 
 static bool t6_manual_only;
 module_param_named(manual_only,
@@ -775,15 +784,33 @@ static int t6_send_frame_jpeg_cmd(struct t6_device *t6, struct t6_head *head,
 				  const void *pixels,
 				  size_t pixel_len)
 {
+	int ret;
+	unsigned int quality;
+
 	/*
-	 * The stable secondary transport discovered in userspace sends JPEG through
-	 * cmd_addr with vendor-specific layout. Keep the interface isolated here so
-	 * the eventual in-kernel encoder/packer lands without rewriting the worker.
+	 * The secondary output uses the vendor JPEG/cmd transport discovered in
+	 * userspace. Encode the staged XRGB framebuffer into the pre-allocated JPEG
+	 * staging buffer, then hand the resulting blob to the existing cmd ring path.
 	 */
 	if (head->transport == T6_HEAD_TRANSPORT_USER_JPEG)
 		return 0;
+	if (!pixels || !pixel_len)
+		return -EINVAL;
+	if (!head->jpeg_staging || !head->jpeg_staging_size)
+		return -ENOMEM;
 
-	return -EOPNOTSUPP;
+	quality = clamp(t6_jpeg_quality, 1U, 100U);
+	ret = t6_jpeg_encode_xrgb8888(pixels,
+				     head->width,
+				     head->height,
+				     head->width * 4,
+				     quality,
+				     head->jpeg_staging,
+				     head->jpeg_staging_size);
+	if (ret < 0)
+		return ret;
+
+	return t6_send_jpeg_blob(t6, head, head->jpeg_staging, ret);
 }
 
 static int t6_send_frame(struct t6_device *t6, struct t6_head *head,
@@ -1532,10 +1559,6 @@ static int t6_usb_probe(struct usb_interface *intf,
 
 	drm_mode_config_reset(drm);
 
-	/*
-	 * Advertise only heads with a currently supported transport as connected
-	 * until the in-kernel JPEG/cmd path exists for the secondary output.
-	 */
 	for (head_idx = 0; head_idx < T6_OUTPUT_COUNT; head_idx++) {
 		struct t6_head *head = t6_get_head(t6, head_idx);
 
@@ -1547,7 +1570,11 @@ static int t6_usb_probe(struct usb_interface *intf,
 			 "experimental_secondary_raw=1 exposes logical output 1 through the unstable raw transport; expect flicker or corruption until the in-kernel JPEG path exists\n");
 	if (t6_secondary_userspace_jpeg)
 		dev_warn(&intf->dev,
-			 "secondary_userspace_jpeg=1 requires a userspace feeder to write JPEG frames into /dev/trigger6-*-out1-jpeg for logical output 1\n");
+			 "secondary_userspace_jpeg=1 forces the deprecated userspace JPEG feeder path for logical output 1\n");
+	else
+		dev_info(&intf->dev,
+			 "Logical output 1 uses the native in-kernel JPEG encoder at quality=%u\n",
+			 clamp(t6_jpeg_quality, 1U, 100U));
 	if (t6->manual_only)
 		dev_warn(&intf->dev,
 			 "manual_only=1 keeps DRM connectors disconnected and blocks automatic scanout; use this for the safest guarded live probes\n");

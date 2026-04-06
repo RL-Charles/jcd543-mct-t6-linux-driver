@@ -8,7 +8,7 @@ First Linux driver for MCT Trigger 6 USB display adapters (StarTech USBC2HD4, an
 |-----------|--------|---------|
 | **Userspace Python driver** | **Working** | 3 monitors at 1920x1080, correct colors, stable output 1 via vendor-style JPEG routing |
 | **Kernel DRM driver** | **Experimental but live** | Loads on Pop!_OS/COSMIC, exports real DRM connectors, and COSMIC can enable extended T6 heads |
-| **3rd monitor (output 1)** | **Hybrid DRM path in progress** | The stable transport is still JPEG plus `cmdAddr`; `secondary_userspace_jpeg=1` now exposes the DRM head while userspace feeds `/dev/trigger6-*-out1-jpeg`. `experimental_secondary_raw=1` remains diagnostic-only after a host freeze during live testing |
+| **3rd monitor (output 1)** | **Native kernel JPEG path live** | The stable transport remains vendor JPEG plus `cmdAddr`, but the kernel now encodes JPEG internally and sends it through the existing secondary transport. `secondary_userspace_jpeg=1` is now a deprecated fallback for deliberate debugging only |
 
 See `ROADMAP.md` for the plan from the current userspace preview to a proper DRM/KMS driver.
 
@@ -190,7 +190,7 @@ For output 1, quality values above 95 and `jpeg-subsampling` values other than `
 
 ## Pop!_OS / GNOME Setup
 
-The userspace driver is still the safe path for daily work on Pop!_OS. For native extension experiments on kernel 6.17, prefer the hybrid kernel path with `secondary_userspace_jpeg=1`; do not persist `experimental_secondary_raw=1` as your default configuration.
+The userspace driver is still the safe path for daily work on Pop!_OS. For native extension experiments on the kernel path, prefer the default in-kernel JPEG transport and keep `experimental_secondary_raw=1` as a diagnostic-only option.
 
 Why the old service did not work:
 
@@ -231,26 +231,17 @@ sudo depmod -a
 
 # Test manually first. Do not persist raw-secondary options in modprobe.d.
 sudo modprobe -r trigger6 2>/dev/null || true
-sudo modprobe trigger6 secondary_userspace_jpeg=1 manual_only=1
+sudo modprobe trigger6 manual_only=1 jpeg_quality=85
 
 # Disable the old userspace mirror service so it does not reclaim the USB devices
 systemctl --user disable --now mct-t6-display.service
 
-# Output 1 stays black until a feeder writes JPEG frames into the hybrid device node
-mct-t6-feed-output1 --list-devices
-mct-t6-feed-output1 --list-streams
-mct-t6-feed-output1 --device /dev/trigger6-006-013-out1-jpeg --stream-index 2 --fps 2
-
-# Animated manual-only visibility test with obvious frame numbers
-mct-t6-feed-output1 --device /dev/trigger6-006-013-out1-jpeg --test-pattern --animate-test-pattern --frames 16 --fps 1
-
-# Keepalive-style test: hold each logical frame for ~1s while still sending
-# 5 writes per second so the monitor does not drop signal between updates
-mct-t6-feed-output1 --device /dev/trigger6-006-013-out1-jpeg --test-pattern --animate-test-pattern --frames 16 --repeat-each-frame 5 --fps 5
+# Native path: output 1 is encoded and transmitted inside the kernel driver
+# once the compositor starts scanout. Keep manual_only=1 for guarded probe work.
 
 # Only drop manual_only=1 when you intentionally want live DRM scanout risk
 # from the compositor:
-# sudo modprobe trigger6 secondary_userspace_jpeg=1 manual_only=0
+# sudo modprobe trigger6 manual_only=0 jpeg_quality=85
 ```
 
 Safer host workflow:
@@ -287,11 +278,11 @@ The wrapper is intentionally conservative. It can quarantine the attached T6 USB
 
 The driver now also fails closed after a fatal USB transport error on a T6 chip: it stops queueing further frame traffic for that adapter and lets its connectors fall back to disconnected until you reload the module or unplug/replug the dongle. That does not fix the underlying transport fault, but it does avoid sitting in the repeated `Frame send failed ... -71` loop after the first bad write.
 
-For the safest guarded host workflow, keep `manual_only=1` enabled. That lets the module probe the adapters and register `/dev/trigger6-*-out1-jpeg` for deliberate one-shot tests while keeping the DRM connectors disconnected so COSMIC cannot auto-enable them.
+For the safest guarded host workflow, keep `manual_only=1` enabled. That lets the module probe the adapters without advertising active DRM scanout while you verify probe, hotplug, and suspend behavior.
 
-The current driver source also registers those hybrid JPEG miscdevices with mode `0666`, and that behavior is now verified on the live host after reboot and guarded reload, so the manual-only feeder test no longer needs a separate udev rule or `sudo` just to open `/dev/trigger6-*-out1-jpeg`.
+The default path no longer auto-starts a relay daemon or installs a misc-device-triggered systemd unit. The native JPEG transport is now self-contained inside the kernel module.
 
-The current live behavior also suggests the panel needs a steady stream to stay awake: slow one-shot frame changes can be visible but still let the monitor drop signal between updates, while a higher write cadence with repeated logical frames is more stable. `mct-t6-feed-output1` now supports `--animate-test-pattern` plus `--repeat-each-frame` specifically to test that keepalive hypothesis.
+The panel still needs a steady stream to stay awake, and the kernel keepalive path now re-sends the last JPEG blob directly without relying on a userspace feeder.
 
 `tools/trigger6-host-guard.sh` now defaults to that safe mode and refuses `manual_only=0` unless you also set `TRIGGER6_ALLOW_LIVE_SCANOUT=1` for the command. That keeps an accidental environment override from silently re-enabling the risky compositor path.
 
@@ -350,22 +341,22 @@ The kernel driver successfully:
 - Caches both logical heads per chip and reads EDID for each connected output
 - Registers DRM cards for the T6 USB chips
 - Exposes real COSMIC-visible HDMI connectors through DRM/KMS
-- Supports raw-capable heads directly and can expose secondary heads with `secondary_userspace_jpeg=1` while a userspace feeder injects stable JPEG frames into `/dev/trigger6-*-out1-jpeg`
+- Supports raw-capable heads directly and drives logical output 1 through the native in-kernel JPEG plus `cmdAddr` transport
 
-The current kernel refactor keeps chip-scoped init and per-head framebuffer metadata in sync with the working userspace discoveries, and the code now models one DRM connector/pipe per logical head. The missing piece is still the proper in-kernel JPEG plus `cmdAddr` transport for logical output 1, so the hybrid bridge is the safer way to exercise native extension without reusing the unstable raw-secondary stopgap.
+The current kernel refactor keeps chip-scoped init and per-head framebuffer metadata in sync with the working userspace discoveries, and the code now models one DRM connector/pipe per logical head while encoding the secondary path in-kernel.
 
 The immediate atomic-commit freeze was addressed by moving USB I/O off the pipe update path and wiring the DRM mode-config atomic hooks correctly. On the Pop!_OS/COSMIC host, this now produces real extended heads instead of only mirror-mode userspace output.
 
 Current limitations:
 
-- `secondary_userspace_jpeg=1` still depends on a userspace feeder; output 1 will stay black until `mct-t6-feed-output1` is running.
+- `secondary_userspace_jpeg=1` is deprecated and exists only as a fallback debugging path.
 - `experimental_secondary_raw=1` is still available for controlled diagnostics, but it is no longer the recommended live path because the vendor's stable 1080p secondary transport is JPEG-routed, not raw RGB, and a host freeze was observed during live testing.
 
 ## Contributing
 
 The biggest unsolved problems:
 
-1. **Replace both current stopgaps with a proper in-kernel secondary transport** — logical output 1 should use the vendor-style JPEG plus `cmdAddr` path without relying on either `experimental_secondary_raw` or the current `/dev/trigger6-*-out1-jpeg` bridge.
+1. **Harden the native secondary transport** — logical output 1 now uses the vendor-style JPEG plus `cmdAddr` path in-kernel, but it still needs broader validation, performance tuning, and long-run testing.
 
 2. **Harden the kernel DRM path** — hotplug, suspend/resume, and repeated compositor reconfiguration still need broader validation on kernel 6.17.
 

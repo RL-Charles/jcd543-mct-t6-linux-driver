@@ -23,6 +23,8 @@
 #include <drm/drm_device.h>
 #include <drm/drm_simple_kms_helper.h>
 
+#define T6_JPEG_QUALITY_DEFAULT	85
+
 /* USB IDs */
 #define T6_VID			0x0711
 #define T6_PID			0x5601
@@ -212,6 +214,7 @@ static inline struct t6_head *t6_head_from_connector(struct drm_connector *conne
 static inline bool t6_head_scanout_supported(const struct t6_head *head)
 {
 	return head->transport == T6_HEAD_TRANSPORT_RAW ||
+	       head->transport == T6_HEAD_TRANSPORT_JPEG_CMD ||
 	       head->transport == T6_HEAD_TRANSPORT_USER_JPEG;
 }
 

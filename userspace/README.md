@@ -19,7 +19,7 @@ What this package is not yet:
 python -m pip install ./userspace
 ```
 
-This installs the `mct-t6-display`, `mct-t6-install-user-service`, `mct-t6-recover-output1`, `mct-t6-benchmark-output1`, and `mct-t6-feed-output1` commands.
+This installs the `mct-t6-display`, `mct-t6-install-user-service`, `mct-t6-recover-output1`, `mct-t6-benchmark-output1`, and the legacy `mct-t6-feed-output1` debugging command.
 
 ## Run
 
@@ -57,10 +57,10 @@ Offline JPEG research without touching the device:
 mct-t6-benchmark-output1 --source synthetic --repeats 3
 ```
 
-Hybrid DRM output-1 feeder for the kernel path:
+Legacy hybrid DRM output-1 feeder for fallback debugging only:
 
 ```bash
-# Load the kernel driver manually with the hybrid secondary transport enabled
+# Load the kernel driver manually with the deprecated userspace fallback enabled
 sudo modprobe trigger6 secondary_userspace_jpeg=1
 
 mct-t6-feed-output1 --list-devices
@@ -79,5 +79,5 @@ mct-t6-feed-output1 --device /dev/trigger6-006-013-out1-jpeg --stream-index 2 --
 - Manual JPEG overrides are available with `--jpeg-quality` and `--jpeg-subsampling`.
 - Use `--allow-unsafe-secondary-jpeg` if you intentionally want to test settings outside the known-good output-1 envelope.
 - `mct-t6-recover-output1` now restores output 1 back to the known-good `balanced/95/2` state by default after any experiment run.
-- `mct-t6-feed-output1` is for the hybrid DRM path: the kernel owns the connector, and userspace injects stable JPEG frames into `/dev/trigger6-*-out1-jpeg` after the module is loaded with `secondary_userspace_jpeg=1`.
+- `mct-t6-feed-output1` is now a legacy debugging tool. The default kernel path for logical output 1 encodes JPEG in-kernel and does not require a userspace feeder.
 - `--stats-interval` emits rolling summaries for capture, frame preparation, encode time, USB send time, and payload throughput.
