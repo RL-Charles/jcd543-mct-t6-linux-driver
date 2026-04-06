@@ -679,7 +679,6 @@ static int t6_send_jpeg_blob(struct t6_device *t6, struct t6_head *head,
 	if (total_payload > head->jpeg_staging_size)
 		return -E2BIG;
 	video_payload = head->jpeg_staging;
-	memset(video_payload, 0, total_payload);
 
 	memset(&fh, 0, sizeof(fh));
 	fh.command = cpu_to_le32(head->output_idx == 0 ?
@@ -692,8 +691,17 @@ static int t6_send_jpeg_blob(struct t6_device *t6, struct t6_head *head,
 	fh.u_offset = cpu_to_le32(fb_addr + y_block_size);
 	fh.source_format = cpu_to_le32(T6_FMT_JPEG);
 	fh.flag = flag;
+
+	/*
+	 * The native JPEG path can pass head->jpeg_staging as jpg_data.
+	 * Build payload in-place without zeroing the source before copying.
+	 */
+	if (jpg_data != video_payload)
+		memcpy(video_payload + sizeof(fh), jpg_data, jpg_len);
+	else
+		memmove(video_payload + sizeof(fh), jpg_data, jpg_len);
+	memset(video_payload + sizeof(fh) + jpg_len, 0, T6_JPEG_PADDING_SIZE);
 	memcpy(video_payload, &fh, sizeof(fh));
-	memcpy(video_payload + sizeof(fh), jpg_data, jpg_len);
 
 	memset(&bch, 0, sizeof(bch));
 	bch.payload_length = cpu_to_le32(total_payload);
