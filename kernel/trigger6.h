@@ -17,6 +17,8 @@
 #include <linux/workqueue.h>
 #include <linux/timer.h>
 #include <linux/atomic.h>
+#include <linux/spinlock.h>
+#include <linux/wait.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_device.h>
 #include <drm/drm_simple_kms_helper.h>
@@ -142,6 +144,13 @@ struct t6_head {
 	u8 *jpeg_staging;
 	size_t jpeg_staging_size;
 
+	/* Framebuffer export for hybrid JPEG path (compositor → userspace encode) */
+	u8 *fb_export_buf;
+	spinlock_t fb_export_lock;
+	wait_queue_head_t fb_export_wq;
+	atomic_t fb_export_seq;
+	size_t fb_export_len;
+
 	/* Keepalive for monitor stability */
 	struct timer_list keepalive_timer;
 	u8 *last_jpeg_data;
@@ -202,7 +211,8 @@ static inline struct t6_head *t6_head_from_connector(struct drm_connector *conne
 
 static inline bool t6_head_scanout_supported(const struct t6_head *head)
 {
-	return head->transport == T6_HEAD_TRANSPORT_RAW;
+	return head->transport == T6_HEAD_TRANSPORT_RAW ||
+	       head->transport == T6_HEAD_TRANSPORT_USER_JPEG;
 }
 
 static inline bool t6_head_drm_scanout_enabled(const struct t6_head *head)

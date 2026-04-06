@@ -3,6 +3,7 @@
 import argparse
 import importlib.util
 import io
+import os
 import sys
 import time
 import uuid
@@ -349,6 +350,11 @@ def main():
     parser.add_argument("--stream-index", type=int, help="Portal stream index to relay into the chosen JPEG device")
     parser.add_argument("--test-pattern", action="store_true", help="Send a generated test pattern instead of relaying a portal stream")
     parser.add_argument(
+        "--relay-framebuffer",
+        action="store_true",
+        help="Read compositor framebuffer from the kernel device, JPEG-encode, and write back (hybrid DRM path)",
+    )
+    parser.add_argument(
         "--animate-test-pattern",
         action="store_true",
         help="Change the test pattern every frame so panel updates are easier to notice",
@@ -415,6 +421,40 @@ def main():
                 sent += 1
             if delay > 0:
                 time.sleep(delay)
+        return
+
+    if args.relay_framebuffer:
+        frame_size = args.width * args.height * 4  # XRGB8888
+        fd = os.open(str(device_path), os.O_RDWR)
+        try:
+            print(f"Relay-framebuffer mode: reading {args.width}x{args.height} XRGB8888 "
+                  f"({frame_size} bytes) from {device_path}, JPEG q={args.jpeg_quality}")
+            while args.frames == 0 or sent < args.frames:
+                try:
+                    data = os.pread(fd, frame_size, 0)
+                except OSError as e:
+                    print(f"Read error (device gone?): {e}")
+                    break
+                if len(data) != frame_size:
+                    print(f"Short read: {len(data)}/{frame_size} bytes")
+                    break
+
+                img = Image.frombytes("RGB", (args.width, args.height), data, "raw", "BGRX")
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=args.jpeg_quality, subsampling=args.jpeg_subsampling)
+                jpg = buf.getvalue()
+
+                try:
+                    os.pwrite(fd, jpg, 0)
+                except OSError as e:
+                    print(f"Write error: {e}")
+                    break
+
+                sent += 1
+                if sent % 100 == 1:
+                    print(f"Frame {sent}: {len(jpg)} bytes JPEG")
+        finally:
+            os.close(fd)
         return
 
     if args.stream_index is None:

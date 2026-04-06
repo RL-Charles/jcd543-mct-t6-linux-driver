@@ -21,6 +21,7 @@
 #include <linux/usb.h>
 #include <linux/version.h>
 #include <linux/timer.h>
+#include <linux/poll.h>
 
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
@@ -193,6 +194,9 @@ static void t6_head_defaults(struct t6_device *t6,
 	head->height = 1080;
 	strscpy(head->monitor_name, "T6 Display", sizeof(head->monitor_name));
 	timer_setup(&head->keepalive_timer, t6_keepalive_timeout, 0);
+	spin_lock_init(&head->fb_export_lock);
+	init_waitqueue_head(&head->fb_export_wq);
+	atomic_set(&head->fb_export_seq, 0);
 	if (output_idx == 0)
 		head->transport = T6_HEAD_TRANSPORT_RAW;
 	else if (t6_secondary_userspace_jpeg)
@@ -301,6 +305,14 @@ static int t6_alloc_head_buffers(struct t6_device *t6)
 			if (!head->jpeg_staging)
 				return -ENOMEM;
 		}
+
+		/* Framebuffer export buffer for hybrid JPEG compositor path */
+		if (head->transport == T6_HEAD_TRANSPORT_USER_JPEG) {
+			head->fb_export_buf =
+				kvzalloc(head->tx_buf_size, GFP_KERNEL);
+			if (!head->fb_export_buf)
+				return -ENOMEM;
+		}
 	}
 
 	return 0;
@@ -328,6 +340,10 @@ static void t6_free_head_buffers(struct t6_device *t6)
 		kvfree(head->jpeg_staging);
 		head->jpeg_staging = NULL;
 		head->jpeg_staging_size = 0;
+
+		kvfree(head->fb_export_buf);
+		head->fb_export_buf = NULL;
+		head->fb_export_len = 0;
 
 		timer_delete_sync(&head->keepalive_timer);
 		kvfree(head->last_jpeg_data);
@@ -787,9 +803,80 @@ out_unlock:
 	return len;
 }
 
+static ssize_t t6_jpeg_misc_read(struct file *file, char __user *buf,
+				 size_t len, loff_t *ppos)
+{
+	struct miscdevice *misc = file->private_data;
+	struct t6_head *head = container_of(misc, struct t6_head, jpeg_miscdev);
+	struct t6_device *t6 = head->t6;
+	int last_seq, ret;
+	u8 *src;
+	size_t frame_len;
+
+	if (*ppos != 0)
+		return -ESPIPE;
+	if (head->transport != T6_HEAD_TRANSPORT_USER_JPEG)
+		return -EOPNOTSUPP;
+	if (!head->fb_export_buf)
+		return -ENODEV;
+
+	/* Wait for a new frame from the compositor */
+	last_seq = atomic_read(&head->fb_export_seq);
+	ret = wait_event_interruptible(head->fb_export_wq,
+		atomic_read(&head->fb_export_seq) != last_seq ||
+		drm_dev_is_unplugged(&t6->drm));
+	if (ret)
+		return ret;
+	if (drm_dev_is_unplugged(&t6->drm))
+		return -ENODEV;
+
+	smp_rmb();
+
+	/* Grab the export buffer pointer under spinlock */
+	spin_lock(&head->fb_export_lock);
+	src = head->fb_export_buf;
+	frame_len = head->fb_export_len;
+	spin_unlock(&head->fb_export_lock);
+
+	if (!src || !frame_len)
+		return -EAGAIN;
+	if (len < frame_len)
+		return -EINVAL;
+
+	if (copy_to_user(buf, src, frame_len))
+		return -EFAULT;
+
+	return frame_len;
+}
+
+static __poll_t t6_jpeg_misc_poll(struct file *file,
+				  struct poll_table_struct *wait)
+{
+	struct miscdevice *misc = file->private_data;
+	struct t6_head *head = container_of(misc, struct t6_head, jpeg_miscdev);
+	struct t6_device *t6 = head->t6;
+	__poll_t mask = 0;
+
+	poll_wait(file, &head->fb_export_wq, wait);
+
+	/* Always writable (for JPEG injection) */
+	mask |= EPOLLOUT | EPOLLWRNORM;
+
+	/* Readable when a frame is available */
+	if (atomic_read(&head->fb_export_seq) > 0)
+		mask |= EPOLLIN | EPOLLRDNORM;
+
+	if (drm_dev_is_unplugged(&t6->drm))
+		mask |= EPOLLHUP;
+
+	return mask;
+}
+
 static const struct file_operations t6_jpeg_misc_fops = {
 	.owner = THIS_MODULE,
+	.read = t6_jpeg_misc_read,
 	.write = t6_jpeg_misc_write,
+	.poll = t6_jpeg_misc_poll,
 	.llseek = noop_llseek,
 };
 
@@ -911,6 +998,10 @@ static void t6_log_head(struct t6_head *head)
 	if (head->connected && !t6_head_scanout_supported(head))
 		dev_warn(&head->t6->udev->dev,
 			 "Head %u is detected but DRM scanout is disabled until JPEG/cmd transport exists in-kernel\n",
+			 head->output_idx);
+	else if (head->connected && head->transport == T6_HEAD_TRANSPORT_USER_JPEG)
+		dev_info(&head->t6->udev->dev,
+			 "Head %u is compositor-managed; a userspace daemon must read() raw frames and write() JPEG data to /dev/trigger6-*-out1-jpeg\n",
 			 head->output_idx);
 	else if (head->connected && head->t6->manual_only)
 		dev_info(&head->t6->udev->dev,
@@ -1158,9 +1249,43 @@ static void t6_pipe_update(struct drm_simple_display_pipe *pipe,
 	if (!fb)
 		return;
 
-	/* Userspace owns frame injection for the hybrid secondary JPEG path. */
-	if (head->transport == T6_HEAD_TRANSPORT_USER_JPEG)
+	/* Userspace owns frame injection for the hybrid secondary JPEG path.
+	 * Capture the compositor's framebuffer and make it available to the
+	 * userspace daemon via read() on the JPEG misc device.
+	 */
+	if (head->transport == T6_HEAD_TRANSPORT_USER_JPEG) {
+		struct drm_shadow_plane_state *export_shadow;
+		void *export_vaddr;
+		size_t export_len;
+		u8 *tmp;
+
+		export_shadow = to_drm_shadow_plane_state(state);
+		export_vaddr = export_shadow->data[0].vaddr;
+		if (!export_vaddr)
+			return;
+
+		export_len = fb->pitches[0] * fb->height;
+		if (export_len > head->tx_buf_size || !head->fb_export_buf)
+			return;
+
+		/* Write framebuffer into tx_back (no lock needed — only we write here) */
+		memcpy(head->tx_back, export_vaddr, export_len);
+
+		/* Swap tx_back and fb_export_buf so the reader gets the fresh frame
+		 * while the next pipe_update writes to the other buffer.
+		 */
+		spin_lock(&head->fb_export_lock);
+		tmp = head->fb_export_buf;
+		head->fb_export_buf = head->tx_back;
+		head->fb_export_len = export_len;
+		head->tx_back = tmp;
+		spin_unlock(&head->fb_export_lock);
+
+		smp_wmb();
+		atomic_inc(&head->fb_export_seq);
+		wake_up_interruptible(&head->fb_export_wq);
 		return;
+	}
 
 	t6 = to_t6(pipe->crtc.dev);
 	if (t6->manual_only)
@@ -1429,6 +1554,12 @@ static void t6_usb_disconnect(struct usb_interface *intf)
 	 * No poll_fini needed -- polling is disabled.
 	 */
 	drm_dev_unplug(&t6->drm);
+	/* Wake any userspace readers blocked on framebuffer export */
+	{
+		unsigned int i;
+		for (i = 0; i < T6_OUTPUT_COUNT; i++)
+			wake_up_interruptible(&t6_get_head(t6, i)->fb_export_wq);
+	}
 	cancel_delayed_work_sync(&t6->reprobe_work);
 	cancel_delayed_work_sync(&t6->tx_defer_work);
 	cancel_work_sync(&t6->tx_work);
