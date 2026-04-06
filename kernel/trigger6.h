@@ -23,7 +23,7 @@
 #include <drm/drm_device.h>
 #include <drm/drm_simple_kms_helper.h>
 
-#define T6_JPEG_QUALITY_DEFAULT	85
+#define T6_JPEG_QUALITY_DEFAULT	95
 
 /* USB IDs */
 #define T6_VID			0x0711

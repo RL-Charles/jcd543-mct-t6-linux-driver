@@ -16,7 +16,8 @@
 #include "trigger6_jpeg.h"
 
 #define T6_JPEG_COMPONENTS	3
-#define T6_JPEG_DCT_SCALE	16384
+/* DCT matrix constants are scaled to ~8192 units. */
+#define T6_JPEG_DCT_SCALE	8192
 #define T6_JPEG_MAX_HUFF_BITS	16
 
 struct t6_jpeg_huff_table {
