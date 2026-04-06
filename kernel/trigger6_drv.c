@@ -1242,12 +1242,30 @@ static void t6_pipe_enable(struct drm_simple_display_pipe *pipe,
 			   struct drm_crtc_state *crtc_state,
 			   struct drm_plane_state *plane_state)
 {
-	/* T6 chip was initialized at probe. Nothing to do here. */
+	struct t6_head *head = t6_head_from_pipe(pipe);
+	struct t6_device *t6 = head->t6;
+	int idx;
+
+	if (!drm_dev_enter(&t6->drm, &idx))
+		return;
+
+	t6_ctrl_out(t6, T6_REQ_MONITOR_CTRL, head->output_idx, 1, NULL, 0);
+	drm_dev_exit(idx);
 }
 
 static void t6_pipe_disable(struct drm_simple_display_pipe *pipe)
 {
-	/* Optional: could send monitor power off */
+	struct t6_head *head = t6_head_from_pipe(pipe);
+	struct t6_device *t6 = head->t6;
+	int idx;
+
+	timer_delete_sync(&head->keepalive_timer);
+
+	if (!drm_dev_enter(&t6->drm, &idx))
+		return;
+
+	t6_ctrl_out(t6, T6_REQ_MONITOR_CTRL, head->output_idx, 0, NULL, 0);
+	drm_dev_exit(idx);
 }
 
 /*
@@ -1605,6 +1623,45 @@ static void t6_usb_disconnect(struct usb_interface *intf)
 }
 
 /* ------------------------------------------------------------------
+ * USB suspend / resume
+ * ------------------------------------------------------------------
+ */
+
+static int t6_usb_suspend(struct usb_interface *intf, pm_message_t message)
+{
+	struct t6_device *t6 = usb_get_intfdata(intf);
+	unsigned int i;
+
+	if (!t6)
+		return 0;
+
+	for (i = 0; i < T6_OUTPUT_COUNT; i++)
+		timer_delete_sync(&t6_get_head(t6, i)->keepalive_timer);
+
+	cancel_delayed_work_sync(&t6->reprobe_work);
+	cancel_delayed_work_sync(&t6->tx_defer_work);
+	cancel_work_sync(&t6->tx_work);
+	cancel_work_sync(&t6->keepalive_work);
+
+	return 0;
+}
+
+static int t6_usb_resume(struct usb_interface *intf)
+{
+	struct t6_device *t6 = usb_get_intfdata(intf);
+
+	if (!t6)
+		return 0;
+
+	/*
+	 * Re-initialise the chip -- the T6 loses all state across
+	 * a USB suspend cycle.  The DRM atomic state machine will
+	 * call pipe_enable/pipe_update to resume scanout.
+	 */
+	return t6_chip_init(t6);
+}
+
+/* ------------------------------------------------------------------
  * USB driver
  * ------------------------------------------------------------------
  */
@@ -1619,6 +1676,9 @@ static struct usb_driver t6_usb_driver = {
 	.name = DRIVER_NAME,
 	.probe = t6_usb_probe,
 	.disconnect = t6_usb_disconnect,
+	.suspend = t6_usb_suspend,
+	.resume = t6_usb_resume,
+	.reset_resume = t6_usb_resume,
 	.id_table = t6_ids,
 };
 module_usb_driver(t6_usb_driver);
