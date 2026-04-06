@@ -4,7 +4,7 @@ set -euo pipefail
 VID="0711"
 PID="5601"
 MODULE="trigger6"
-DEFAULT_MODULE_ARGS="${TRIGGER6_MODULE_ARGS:-jpeg_quality=92 manual_only=1}"
+DEFAULT_MODULE_ARGS="${TRIGGER6_MODULE_ARGS:-jpeg_quality=100 manual_only=1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say() {
