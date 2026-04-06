@@ -433,7 +433,8 @@ static void t6_jpeg_load_y_block(const u8 *src,
 			int red = pixel[2];
 			int y_value;
 
-			y_value = (77 * red + 150 * green + 29 * blue + 128) >> 8;
+			/* BT.601 studio-range luma (16..235) for T6 decoder parity. */
+			y_value = ((66 * red + 129 * green + 25 * blue + 128) >> 8) + 16;
 			block[y * 8 + x] = t6_jpeg_clamp_byte(y_value) - 128;
 		}
 	}
@@ -475,9 +476,9 @@ static void t6_jpeg_load_chroma_block(const u8 *src,
 			blue = DIV_ROUND_CLOSEST(blue, 4);
 
 			cb_block[y * 8 + x] =
-				t6_jpeg_clamp_byte(((-43 * red - 85 * green + 128 * blue + 128) >> 8) + 128) - 128;
+				t6_jpeg_clamp_byte(((-38 * red - 74 * green + 112 * blue + 128) >> 8) + 128) - 128;
 			cr_block[y * 8 + x] =
-				t6_jpeg_clamp_byte(((128 * red - 107 * green - 21 * blue + 128) >> 8) + 128) - 128;
+				t6_jpeg_clamp_byte(((112 * red - 94 * green - 18 * blue + 128) >> 8) + 128) - 128;
 		}
 	}
 }
