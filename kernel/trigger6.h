@@ -24,6 +24,9 @@
 #include <drm/drm_simple_kms_helper.h>
 
 #define T6_JPEG_QUALITY_DEFAULT	95
+#define T6_SCANOUT_WIDTH	1920
+#define T6_SCANOUT_HEIGHT	1080
+#define T6_SCANOUT_REFRESH_HZ	60
 
 /* USB IDs */
 #define T6_VID			0x0711

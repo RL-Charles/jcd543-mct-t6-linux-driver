@@ -10,6 +10,7 @@
 
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_connector.h>
+#include <drm/drm_edid.h>
 #include <drm/drm_modes.h>
 #include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_probe_helper.h>
@@ -37,12 +38,26 @@ static int t6_connector_get_modes(struct drm_connector *connector)
 {
 	struct t6_head *head = t6_head_from_connector(connector);
 	struct drm_display_mode *mode;
+	struct edid *edid = (struct edid *)head->edid_data;
 
 	if (!t6_head_runtime_connected(head))
 		return 0;
 
-	mode = drm_cvt_mode(connector->dev, head->width, head->height,
-			    60, false, false, false);
+	/*
+	 * We cache EDID for userspace visibility, but the reverse-engineered T6
+	 * modeset path is still only validated for the Windows-captured 1080p60
+	 * timing blob. Do not advertise monitor-native modes we cannot program.
+	 */
+	if (head->edid_len >= EDID_LENGTH && drm_edid_is_valid(edid))
+		drm_connector_update_edid_property(connector, edid);
+	else
+		drm_connector_update_edid_property(connector, NULL);
+
+	mode = drm_cvt_mode(connector->dev,
+			    T6_SCANOUT_WIDTH,
+			    T6_SCANOUT_HEIGHT,
+			    T6_SCANOUT_REFRESH_HZ,
+			    false, false, false);
 	if (!mode)
 		return 0;
 
@@ -57,9 +72,10 @@ static int t6_connector_get_modes(struct drm_connector *connector)
 static enum drm_mode_status
 t6_connector_mode_valid_common(const struct drm_display_mode *mode)
 {
-	if (mode->hdisplay > 1920 || mode->vdisplay > 1200)
+	if (mode->hdisplay != T6_SCANOUT_WIDTH ||
+	    mode->vdisplay != T6_SCANOUT_HEIGHT)
 		return MODE_BAD;
-	if (mode->hdisplay < 640 || mode->vdisplay < 480)
+	if (drm_mode_vrefresh(mode) != T6_SCANOUT_REFRESH_HZ)
 		return MODE_BAD;
 	return MODE_OK;
 }

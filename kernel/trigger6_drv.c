@@ -119,17 +119,18 @@ static const struct drm_mode_config_helper_funcs t6_mode_config_helper_funcs = {
 };
 
 static const unsigned int t6_reprobe_delays_ms[] = {
+	1000,
 	3000,
+	5000,
 	10000,
-	20000,
-	30000,
-	45000,
+	15000,
 };
 
 static int t6_ctrl_out(struct t6_device *t6, u8 req, u16 val,
 		       u16 idx, const void *data, u16 size);
 static int t6_ctrl_in(struct t6_device *t6, u8 req, u16 val,
 		      u16 idx, void *data, u16 size);
+static bool t6_edid_base_block_valid(const u8 *edid);
 
 static void t6_schedule_reprobe(struct t6_device *t6);
 static void t6_trip_transport_fault(struct t6_device *t6,
@@ -252,8 +253,8 @@ static void t6_head_defaults(struct t6_device *t6,
 	memset(head, 0, sizeof(*head));
 	head->t6 = t6;
 	head->output_idx = output_idx;
-	head->width = 1920;
-	head->height = 1080;
+	head->width = T6_SCANOUT_WIDTH;
+	head->height = T6_SCANOUT_HEIGHT;
 	strscpy(head->monitor_name, "T6 Display", sizeof(head->monitor_name));
 	timer_setup(&head->keepalive_timer, t6_keepalive_timeout, 0);
 	spin_lock_init(&head->fb_export_lock);
@@ -304,6 +305,8 @@ static void t6_parse_edid_monitor_name(struct t6_head *head)
 static int t6_probe_head(struct t6_device *t6, struct t6_head *head)
 {
 	u8 status = 0;
+	int preferred_width = T6_SCANOUT_WIDTH;
+	int preferred_height = T6_SCANOUT_HEIGHT;
 	int ret;
 
 	ret = t6_ctrl_in(t6, T6_REQ_GET_STATUS, head->output_idx, 0, &status, 1);
@@ -318,20 +321,39 @@ static int t6_probe_head(struct t6_device *t6, struct t6_head *head)
 	head->edid_len = 0;
 	ret = t6_ctrl_in(t6, T6_REQ_GET_EDID, 0, head->output_idx,
 			 head->edid_data, 128);
-	if (ret >= 128) {
+	if (ret >= 128 && t6_edid_base_block_valid(head->edid_data)) {
 		head->edid_len = 128;
-		head->width = head->edid_data[0x38] |
+		preferred_width = head->edid_data[0x38] |
 			((head->edid_data[0x3A] & 0xF0) << 4);
-		head->height = head->edid_data[0x3B] |
+		preferred_height = head->edid_data[0x3B] |
 			 ((head->edid_data[0x3D] & 0xF0) << 4);
-		if (head->width == 0 || head->height == 0) {
-			head->width = 1920;
-			head->height = 1080;
+		if (preferred_width == 0 || preferred_height == 0) {
+			preferred_width = T6_SCANOUT_WIDTH;
+			preferred_height = T6_SCANOUT_HEIGHT;
 		}
-		head->width = clamp(head->width, 640, 1920);
-		head->height = clamp(head->height, 480, 1200);
+		preferred_width = clamp(preferred_width, 640, 1920);
+		preferred_height = clamp(preferred_height, 480, 1200);
 		t6_parse_edid_monitor_name(head);
+		if (preferred_width != T6_SCANOUT_WIDTH ||
+		    preferred_height != T6_SCANOUT_HEIGHT)
+			dev_info(&t6->udev->dev,
+				 "Head %u monitor reports preferred mode %dx%d, but the current reverse-engineered modeset path is fixed to %dx%d@%d\n",
+				 head->output_idx,
+				 preferred_width,
+				 preferred_height,
+				 T6_SCANOUT_WIDTH,
+				 T6_SCANOUT_HEIGHT,
+				 T6_SCANOUT_REFRESH_HZ);
+	} else if (ret >= 128) {
+		dev_warn(&t6->udev->dev,
+			 "Head %u returned an EDID block with invalid checksum; using fixed %dx%d mode assumptions\n",
+			 head->output_idx,
+			 T6_SCANOUT_WIDTH,
+			 T6_SCANOUT_HEIGHT);
 	}
+
+	head->width = T6_SCANOUT_WIDTH;
+	head->height = T6_SCANOUT_HEIGHT;
 
 	return 0;
 }
@@ -489,6 +511,17 @@ static int t6_ctrl_in(struct t6_device *t6, u8 req, u16 val,
 		memcpy(data, buf, min_t(int, ret, size));
 	kfree(buf);
 	return ret;
+}
+
+static bool t6_edid_base_block_valid(const u8 *edid)
+{
+	u8 checksum = 0;
+	unsigned int idx;
+
+	for (idx = 0; idx < 128; idx++)
+		checksum += edid[idx];
+
+	return checksum == 0;
 }
 
 static int t6_bulk_write(struct t6_device *t6, const void *src, size_t len)
@@ -1215,6 +1248,9 @@ static void t6_reprobe_work(struct work_struct *work)
 		return;
 
 	if (changed)
+		t6->reprobe_attempt = 0;
+
+	if (changed)
 		drm_kms_helper_hotplug_event(&t6->drm);
 
 	if (t6_any_head_disconnected(t6))
@@ -1225,10 +1261,12 @@ static void t6_schedule_reprobe(struct t6_device *t6)
 {
 	unsigned int delay_ms;
 
-	if (t6->reprobe_attempt >= ARRAY_SIZE(t6_reprobe_delays_ms))
-		return;
-
-	delay_ms = t6_reprobe_delays_ms[t6->reprobe_attempt++];
+	if (t6->reprobe_attempt >= ARRAY_SIZE(t6_reprobe_delays_ms) - 1) {
+		delay_ms = t6_reprobe_delays_ms[ARRAY_SIZE(t6_reprobe_delays_ms) - 1];
+		t6->reprobe_attempt = ARRAY_SIZE(t6_reprobe_delays_ms) - 1;
+	} else {
+		delay_ms = t6_reprobe_delays_ms[t6->reprobe_attempt++];
+	}
 	schedule_delayed_work(&t6->reprobe_work,
 			      msecs_to_jiffies(delay_ms));
 }
@@ -1599,8 +1637,8 @@ static int t6_usb_probe(struct usb_interface *intf,
 
 	drm->mode_config.min_width = 640;
 	drm->mode_config.min_height = 480;
-	drm->mode_config.max_width = 1920;
-	drm->mode_config.max_height = 1200;
+	drm->mode_config.max_width = T6_SCANOUT_WIDTH;
+	drm->mode_config.max_height = T6_SCANOUT_HEIGHT;
 	drm->mode_config.preferred_depth = 32;
 
 	for (head_idx = 0; head_idx < T6_OUTPUT_COUNT; head_idx++) {
