@@ -19,7 +19,6 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/usb.h>
-#include <linux/version.h>
 #include <linux/timer.h>
 #include <linux/poll.h>
 
@@ -71,27 +70,31 @@ module_param_named(manual_only,
 MODULE_PARM_DESC(manual_only,
 		 "Keep DRM connectors disconnected and disable automatic scanout; allow only manual userspace JPEG injection and guarded probe logging. Default: false for full driver operation.");
 
-/* Init data from Windows captures */
-static const u8 init_color[] = {
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x1f,
-	0x00,0x00,0x00,0x1f,0x00,0x00,0x00,0x0f,
-	0x00,0x00,0x00,0x0f,0x00,0x00,0x00,0x0f,
-	0x00,0x00,0x00,0x0f,0x00,0x00,0x00,0x0f,
-	0x00,0x00,0x00,0x0f,0x00,0x00,0x00,0x00,
+/*
+ * Hardware init data captured from Windows USB traces.
+ * These register blobs configure the T6 color pipeline, display timing,
+ * and 1920x1080 @ 60 Hz mode during chip initialisation.
+ */
+static const u8 t6_init_color[] = {
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f,
+	0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x0f,
+	0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x0f,
+	0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x0f,
+	0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x00,
 };
-static const u8 init_timing_pre[] = {
-	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x80,0x25,0x00,0x00,0x00,0x00,0x02,0x00,
+static const u8 t6_init_timing_pre[] = {
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x80, 0x25, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
 };
-static const u8 init_timing_post[] = {
-	0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	0x80,0x25,0x00,0x00,0x00,0x00,0x02,0x00,
+static const u8 t6_init_timing_post[] = {
+	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x80, 0x25, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
 };
-static const u8 mode_1080p[] = {
-	0x14,0x44,0x02,0x00,0x3c,0x00,0x98,0x08,
-	0x80,0x07,0x18,0x07,0x2c,0x00,0x65,0x04,
-	0x38,0x04,0xe8,0x03,0x1d,0x00,0xbb,0x02,
-	0xe8,0x03,0x1d,0x01,0x01,0x01,0x00,0x00,
+static const u8 t6_mode_1080p[] = {
+	0x14, 0x44, 0x02, 0x00, 0x3c, 0x00, 0x98, 0x08,
+	0x80, 0x07, 0x18, 0x07, 0x2c, 0x00, 0x65, 0x04,
+	0x38, 0x04, 0xe8, 0x03, 0x1d, 0x00, 0xbb, 0x02,
+	0xe8, 0x03, 0x1d, 0x01, 0x01, 0x01, 0x00, 0x00,
 };
 
 static const u32 t6_formats[] = { DRM_FORMAT_XRGB8888 };
@@ -136,6 +139,25 @@ static const char *t6_transport_name(enum t6_head_transport transport)
 	default:
 		return "raw";
 	}
+}
+
+static bool t6_any_head_pending(struct t6_device *t6)
+{
+	unsigned int i;
+
+	for (i = 0; i < T6_OUTPUT_COUNT; i++) {
+		if (t6_get_head(t6, i)->tx_pending)
+			return true;
+	}
+	return false;
+}
+
+static void t6_wake_all_export_waiters(struct t6_device *t6)
+{
+	unsigned int i;
+
+	for (i = 0; i < T6_OUTPUT_COUNT; i++)
+		wake_up_interruptible(&t6_get_head(t6, i)->fb_export_wq);
 }
 
 static void t6_reset_head_stream_state(struct t6_head *head)
@@ -209,6 +231,36 @@ static void t6_head_defaults(struct t6_device *t6,
 	t6_init_head_addressing(t6, head);
 }
 
+/*
+ * Extract the monitor name from an EDID descriptor block.
+ * EDID descriptors at offsets 0x36..0x7E each span 18 bytes.
+ * Tag 0xFC marks the "Monitor Name" string (up to 13 ASCII chars).
+ */
+static void t6_parse_edid_monitor_name(struct t6_head *head)
+{
+	int i, j, len;
+
+	for (i = 0x36; i < 0x7E; i += 18) {
+		if (head->edid_data[i] != 0 ||
+		    head->edid_data[i + 1] != 0 ||
+		    head->edid_data[i + 3] != 0xFC)
+			continue;
+
+		len = min(13, (int)sizeof(head->monitor_name) - 1);
+		memcpy(head->monitor_name, &head->edid_data[i + 5], len);
+		head->monitor_name[len] = '\0';
+
+		/* Trim trailing whitespace / control characters */
+		for (j = len - 1; j >= 0; j--) {
+			if (head->monitor_name[j] <= ' ')
+				head->monitor_name[j] = '\0';
+			else
+				break;
+		}
+		return;
+	}
+}
+
 static int t6_probe_head(struct t6_device *t6, struct t6_head *head)
 {
 	u8 status = 0;
@@ -238,30 +290,7 @@ static int t6_probe_head(struct t6_device *t6, struct t6_head *head)
 		}
 		head->width = clamp(head->width, 640, 1920);
 		head->height = clamp(head->height, 480, 1200);
-		{
-			int i;
-
-			for (i = 0x36; i < 0x7E; i += 18) {
-				if (head->edid_data[i] == 0 &&
-				    head->edid_data[i + 1] == 0 &&
-				    head->edid_data[i + 3] == 0xFC) {
-					int j;
-					int len = min(13,
-						(int)sizeof(head->monitor_name) - 1);
-
-					memcpy(head->monitor_name,
-					       &head->edid_data[i + 5], len);
-					head->monitor_name[len] = '\0';
-					for (j = len - 1; j >= 0; j--) {
-						if (head->monitor_name[j] <= ' ')
-							head->monitor_name[j] = '\0';
-						else
-							break;
-					}
-					break;
-				}
-			}
-		}
+		t6_parse_edid_monitor_name(head);
 	}
 
 	return 0;
@@ -382,7 +411,8 @@ static struct t6_head *t6_pop_pending_head_locked(struct t6_device *t6,
 
 /* ------------------------------------------------------------------
  * USB helpers -- ALL use kmalloc'd DMA-safe buffers
- * ------------------------------------------------------------------ */
+ * ------------------------------------------------------------------
+ */
 
 static int t6_ctrl_out(struct t6_device *t6, u8 req, u16 val,
 		       u16 idx, const void *data, u16 size)
@@ -461,7 +491,8 @@ static int t6_bulk_write(struct t6_device *t6, const void *src, size_t len)
 
 /* ------------------------------------------------------------------
  * T6 chip init (probe context only -- no drm_dev_enter needed)
- * ------------------------------------------------------------------ */
+ * ------------------------------------------------------------------
+ */
 
 static int t6_chip_init(struct t6_device *t6)
 {
@@ -480,15 +511,19 @@ static int t6_chip_init(struct t6_device *t6)
 		init_head[0] = true;
 
 	ret = t6_ctrl_out(t6, T6_REQ_RESET_LO, 0x0000, 0, NULL, 0);
-	if (ret < 0) return ret;
+	if (ret < 0)
+		return ret;
 	ret = t6_ctrl_out(t6, T6_REQ_RESET_HI, 0x0100, 0, NULL, 0);
-	if (ret < 0) return ret;
+	if (ret < 0)
+		return ret;
 	ret = t6_ctrl_out(t6, T6_REQ_SET_COLOR, 0, 0,
-			  init_color, sizeof(init_color));
-	if (ret < 0) return ret;
+			  t6_init_color, sizeof(t6_init_color));
+	if (ret < 0)
+		return ret;
 	ret = t6_ctrl_out(t6, T6_REQ_SET_TIMING, 0, 0,
-			  init_timing_pre, sizeof(init_timing_pre));
-	if (ret < 0) return ret;
+			  t6_init_timing_pre, sizeof(t6_init_timing_pre));
+	if (ret < 0)
+		return ret;
 
 	for (idx = 0; idx < T6_OUTPUT_COUNT; idx++) {
 		struct t6_head *head = t6_get_head(t6, idx);
@@ -497,7 +532,7 @@ static int t6_chip_init(struct t6_device *t6)
 			continue;
 
 		ret = t6_ctrl_out(t6, T6_REQ_SET_RESOLUTION, head->output_idx, 0,
-				  mode_1080p, sizeof(mode_1080p));
+				  t6_mode_1080p, sizeof(t6_mode_1080p));
 		if (ret < 0)
 			return ret;
 		ret = t6_ctrl_out(t6, T6_REQ_SET_READY, head->output_idx, 0,
@@ -512,17 +547,20 @@ static int t6_chip_init(struct t6_device *t6)
 	}
 
 	ret = t6_ctrl_out(t6, T6_REQ_SET_TIMING, 0, 0,
-			  init_timing_post, sizeof(init_timing_post));
-	if (ret < 0) return ret;
+			  t6_init_timing_post, sizeof(t6_init_timing_post));
+	if (ret < 0)
+		return ret;
 	ret = t6_ctrl_out(t6, T6_REQ_FINALIZE, 0x0002, 0, NULL, 0);
-	if (ret < 0) return ret;
+	if (ret < 0)
+		return ret;
 
 	return 0;
 }
 
 /* ------------------------------------------------------------------
  * Frame sending -- synchronous bulk transfers
- * ------------------------------------------------------------------ */
+ * ------------------------------------------------------------------
+ */
 
 static int t6_send_frame_raw(struct t6_device *t6, struct t6_head *head,
 			     const void *pixels,
@@ -541,11 +579,10 @@ static int t6_send_frame_raw(struct t6_device *t6, struct t6_head *head,
 		return -EINVAL;
 
 	/* Use pre-allocated staging buffer when possible */
-	if (head->video_staging && total_payload <= head->video_staging_size) {
+	if (head->video_staging && total_payload <= head->video_staging_size)
 		video_payload = head->video_staging;
-	} else {
+	else
 		return -ENOMEM;
-	}
 
 	/* Build video flip header (reused for all chunks) */
 	memset(&fh, 0, sizeof(fh));
@@ -686,6 +723,11 @@ out:
 
 static void t6_keepalive_work(struct work_struct *work);
 
+/*
+ * The T6 chip blanks JPEG-decoded outputs that stop receiving frames
+ * after roughly 2-3 seconds.  Re-send the last JPEG blob every 2 s
+ * to keep the display alive when the compositor has no new content.
+ */
 static void t6_keepalive_timeout(struct timer_list *t)
 {
 	struct t6_head *head = container_of(t, struct t6_head, keepalive_timer);
@@ -830,6 +872,7 @@ static ssize_t t6_jpeg_misc_read(struct file *file, char __user *buf,
 	if (drm_dev_is_unplugged(&t6->drm))
 		return -ENODEV;
 
+	/* Pairs with smp_wmb() in t6_pipe_update() after buffer swap */
 	smp_rmb();
 
 	/* Grab the export buffer pointer under spinlock */
@@ -1147,16 +1190,7 @@ static void t6_frame_work(struct work_struct *work)
 		return;
 	}
 	/* Check if another head also has a pending frame */
-	more = false;
-	{
-		unsigned int i;
-		for (i = 0; i < T6_OUTPUT_COUNT; i++) {
-			if (t6_get_head(t6, i)->tx_pending) {
-				more = true;
-				break;
-			}
-		}
-	}
+	more = t6_any_head_pending(t6);
 	mutex_unlock(&t6->tx_lock);
 
 	/*
@@ -1201,7 +1235,8 @@ static void t6_frame_work(struct work_struct *work)
 
 /* ------------------------------------------------------------------
  * DRM pipe callbacks
- * ------------------------------------------------------------------ */
+ * ------------------------------------------------------------------
+ */
 
 static void t6_pipe_enable(struct drm_simple_display_pipe *pipe,
 			   struct drm_crtc_state *crtc_state,
@@ -1281,6 +1316,7 @@ static void t6_pipe_update(struct drm_simple_display_pipe *pipe,
 		head->tx_back = tmp;
 		spin_unlock(&head->fb_export_lock);
 
+		/* Ensure buffer contents visible before bumping sequence */
 		smp_wmb();
 		atomic_inc(&head->fb_export_seq);
 		wake_up_interruptible(&head->fb_export_wq);
@@ -1342,7 +1378,8 @@ static const struct drm_simple_display_pipe_funcs t6_pipe_funcs = {
 
 /* ------------------------------------------------------------------
  * DRM driver
- * ------------------------------------------------------------------ */
+ * ------------------------------------------------------------------
+ */
 
 DEFINE_DRM_GEM_FOPS(t6_fops);
 
@@ -1358,7 +1395,8 @@ static const struct drm_driver t6_drm_driver = {
 
 /* ------------------------------------------------------------------
  * USB probe / disconnect
- * ------------------------------------------------------------------ */
+ * ------------------------------------------------------------------
+ */
 
 static int t6_usb_probe(struct usb_interface *intf,
 			const struct usb_device_id *id)
@@ -1384,13 +1422,8 @@ static int t6_usb_probe(struct usb_interface *intf,
 
 	/* DMA device for GEM */
 	t6->dmadev = usb_intf_get_dma_device(intf);
-	/* drm_dev_set_dma_dev() was added in v6.16; older kernels use the
-	 * parent device passed to devm_drm_dev_alloc().
-	 */
-	#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
 	if (t6->dmadev)
 		drm_dev_set_dma_dev(drm, t6->dmadev);
-	#endif
 
 	usb_set_intfdata(intf, t6);
 
@@ -1555,11 +1588,7 @@ static void t6_usb_disconnect(struct usb_interface *intf)
 	 */
 	drm_dev_unplug(&t6->drm);
 	/* Wake any userspace readers blocked on framebuffer export */
-	{
-		unsigned int i;
-		for (i = 0; i < T6_OUTPUT_COUNT; i++)
-			wake_up_interruptible(&t6_get_head(t6, i)->fb_export_wq);
-	}
+	t6_wake_all_export_waiters(t6);
 	cancel_delayed_work_sync(&t6->reprobe_work);
 	cancel_delayed_work_sync(&t6->tx_defer_work);
 	cancel_work_sync(&t6->tx_work);
@@ -1577,7 +1606,8 @@ static void t6_usb_disconnect(struct usb_interface *intf)
 
 /* ------------------------------------------------------------------
  * USB driver
- * ------------------------------------------------------------------ */
+ * ------------------------------------------------------------------
+ */
 
 static const struct usb_device_id t6_ids[] = {
 	{ USB_DEVICE(T6_VID, T6_PID) },

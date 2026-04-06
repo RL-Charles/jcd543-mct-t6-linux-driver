@@ -1,5 +1,5 @@
 # MCT Trigger T6 USB Display Adapter
 # VID=0x0711 PID=0x5601 (StarTech USBC2HD4 and similar)
 
-# Grant desktop-session access without running the capture daemon as root
-SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5601", MODE="0666", TAG+="uaccess"
+# Grant desktop-session access via uaccess tag (no world-writable needed)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5601", MODE="0660", TAG+="uaccess"

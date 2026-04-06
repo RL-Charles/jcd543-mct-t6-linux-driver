@@ -78,6 +78,12 @@ t6_connector_mode_valid_const(struct drm_connector *connector,
 	return t6_connector_mode_valid_common(mode);
 }
 
+/*
+ * Kernel API compatibility: the mode_valid callback signature changed from
+ * mutable to const struct drm_display_mode * between kernel versions.
+ * Use __builtin_types_compatible_p to select the matching variant at compile
+ * time so the driver builds cleanly on both old and new kernels.
+ */
 #define T6_CONNECTOR_MODE_VALID \
 	__builtin_choose_expr(\
 		__builtin_types_compatible_p(\
