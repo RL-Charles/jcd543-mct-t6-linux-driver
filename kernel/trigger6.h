@@ -132,6 +132,7 @@ struct t6_head {
 	u8 *tx_back;
 	size_t tx_buf_size;
 	size_t tx_len;
+	u32 tx_stride;
 	bool tx_pending;
 	unsigned long tx_last_jiffies;
 	struct miscdevice jpeg_miscdev;

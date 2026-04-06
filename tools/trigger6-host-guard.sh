@@ -4,7 +4,7 @@ set -euo pipefail
 VID="0711"
 PID="5601"
 MODULE="trigger6"
-DEFAULT_MODULE_ARGS="${TRIGGER6_MODULE_ARGS:-secondary_userspace_jpeg=1 manual_only=1}"
+DEFAULT_MODULE_ARGS="${TRIGGER6_MODULE_ARGS:-jpeg_quality=85 manual_only=1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say() {
@@ -353,7 +353,7 @@ status() {
 		say
 		say "Active trigger6 parameters:"
 		host_shell '
-			for name in manual_only secondary_userspace_jpeg experimental_secondary_raw; do
+			for name in manual_only secondary_userspace_jpeg experimental_secondary_raw jpeg_quality; do
 				path="/sys/module/${MODULE}/parameters/$name"
 				[ -f "$path" ] || continue
 				printf "%s=%s\n" "$name" "$(cat "$path")"
@@ -487,7 +487,7 @@ Commands:
   status        Show the live host trigger6 state
   build         Build trigger6.ko against the real host headers
   stage         Build and install trigger6.ko into /lib/modules/.../extra
-  load          Load trigger6 with TRIGGER6_MODULE_ARGS or secondary_userspace_jpeg=1
+	load          Load trigger6 with TRIGGER6_MODULE_ARGS or jpeg_quality=85
 	quarantine    Deauthorize attached T6 USB devices without physically unplugging them
 	unquarantine  Reauthorize previously quarantined T6 USB devices
 	arm           Quarantine attached T6 USB devices, then stage and load trigger6 safely
@@ -500,9 +500,9 @@ Notes:
   - This wrapper intentionally refuses live reloads while a T6 USB adapter is attached.
 	- `safe-unload` also refuses if any process still has a trigger6 DRM or JPEG node open.
 	- `arm` is the lowest-risk live prep path: the module loads, but the attached T6 devices stay logically detached until you explicitly `unquarantine` them.
-	- The default guarded module arguments are `secondary_userspace_jpeg=1 manual_only=1`, which keeps DRM connectors disconnected and blocks automatic compositor scanout while still allowing manual JPEG feeder probes.
+	- The default guarded module arguments are `jpeg_quality=85 manual_only=1`, which keeps DRM connectors disconnected and exercises the native in-kernel JPEG path.
   - If trigger6 is already wedged in teardown, reboot instead of forcing another reload.
-	- Override the module arguments with TRIGGER6_MODULE_ARGS='secondary_userspace_jpeg=1 manual_only=0 foo=bar' only when you intentionally want live DRM scanout risk.
+	- Override the module arguments with TRIGGER6_MODULE_ARGS='jpeg_quality=85 manual_only=0 foo=bar' only when you intentionally want live DRM scanout risk.
 	- The wrapper refuses `manual_only=0` unless you also export TRIGGER6_ALLOW_LIVE_SCANOUT=1 for that command.
 EOF
 }

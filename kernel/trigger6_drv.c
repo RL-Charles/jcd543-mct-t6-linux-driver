@@ -161,6 +161,37 @@ static bool t6_any_head_pending(struct t6_device *t6)
 	return false;
 }
 
+static int t6_pack_xrgb8888_tight(struct t6_head *head,
+				 const void *src,
+				 u32 src_stride,
+				 u8 *dst,
+				 size_t dst_size)
+{
+	const u8 *src_base = src;
+	u32 row_bytes = head->width * 4;
+	u32 y;
+
+	if (!src || !dst || src_stride < row_bytes)
+		return -EINVAL;
+
+	if ((size_t)row_bytes * head->height > dst_size)
+		return -E2BIG;
+
+	if (src_stride == row_bytes) {
+		memcpy(dst, src_base, (size_t)row_bytes * head->height);
+		return 0;
+	}
+
+	for (y = 0; y < head->height; y++) {
+		const u8 *src_row = src_base + (size_t)y * src_stride;
+		u8 *dst_row = dst + (size_t)y * row_bytes;
+
+		memcpy(dst_row, src_row, row_bytes);
+	}
+
+	return 0;
+}
+
 static void t6_wake_all_export_waiters(struct t6_device *t6)
 {
 	unsigned int i;
@@ -369,6 +400,7 @@ static void t6_free_head_buffers(struct t6_device *t6)
 		head->tx_front = NULL;
 		head->tx_buf_size = 0;
 		head->tx_len = 0;
+		head->tx_stride = 0;
 		head->tx_pending = false;
 
 		kvfree(head->video_staging);
@@ -635,6 +667,7 @@ static int t6_send_jpeg_blob(struct t6_device *t6, struct t6_head *head,
 	struct t6_bulk_header bch;
 	struct t6_flip_header fh;
 	u8 *video_payload;
+	const u8 *jpeg_payload;
 	u8 flag;
 	u8 fb_slot_index;
 	u16 y_pitch;
@@ -700,6 +733,7 @@ static int t6_send_jpeg_blob(struct t6_device *t6, struct t6_head *head,
 		memcpy(video_payload + sizeof(fh), jpg_data, jpg_len);
 	else
 		memmove(video_payload + sizeof(fh), jpg_data, jpg_len);
+	jpeg_payload = video_payload + sizeof(fh);
 	memset(video_payload + sizeof(fh) + jpg_len, 0, T6_JPEG_PADDING_SIZE);
 	memcpy(video_payload, &fh, sizeof(fh));
 
@@ -727,7 +761,7 @@ static int t6_send_jpeg_blob(struct t6_device *t6, struct t6_head *head,
 		head->last_jpeg_data = kvmalloc(jpg_len, GFP_KERNEL);
 	}
 	if (head->last_jpeg_data) {
-		memcpy(head->last_jpeg_data, jpg_data, jpg_len);
+		memcpy(head->last_jpeg_data, jpeg_payload, jpg_len);
 		head->last_jpeg_len = jpg_len;
 	}
 
@@ -794,6 +828,7 @@ static int t6_send_frame_jpeg_cmd(struct t6_device *t6, struct t6_head *head,
 {
 	int ret;
 	unsigned int quality;
+	size_t tight_len = (size_t)head->width * head->height * 4;
 
 	/*
 	 * The secondary output uses the vendor JPEG/cmd transport discovered in
@@ -804,6 +839,8 @@ static int t6_send_frame_jpeg_cmd(struct t6_device *t6, struct t6_head *head,
 		return 0;
 	if (!pixels || !pixel_len)
 		return -EINVAL;
+	if (pixel_len < tight_len)
+		return -EINVAL;
 	if (!head->jpeg_staging || !head->jpeg_staging_size)
 		return -ENOMEM;
 
@@ -811,7 +848,7 @@ static int t6_send_frame_jpeg_cmd(struct t6_device *t6, struct t6_head *head,
 	ret = t6_jpeg_encode_xrgb8888(pixels,
 				     head->width,
 				     head->height,
-				     head->width * 4,
+				     head->tx_stride ? head->tx_stride : head->width * 4,
 				     quality,
 				     head->jpeg_staging,
 				     head->jpeg_staging_size);
@@ -1327,6 +1364,7 @@ static void t6_pipe_update(struct drm_simple_display_pipe *pipe,
 	void *vaddr;
 	size_t frame_len;
 	int idx;
+	int ret;
 
 	(void)old_state;
 
@@ -1344,6 +1382,7 @@ static void t6_pipe_update(struct drm_simple_display_pipe *pipe,
 	if (head->transport == T6_HEAD_TRANSPORT_USER_JPEG) {
 		struct drm_shadow_plane_state *export_shadow;
 		void *export_vaddr;
+		u32 export_stride;
 		size_t export_len;
 		u8 *tmp;
 
@@ -1351,13 +1390,19 @@ static void t6_pipe_update(struct drm_simple_display_pipe *pipe,
 		export_vaddr = export_shadow->data[0].vaddr;
 		if (!export_vaddr)
 			return;
+		export_stride = fb->pitches[0];
 
-		export_len = fb->pitches[0] * fb->height;
+		export_len = (size_t)head->width * head->height * 4;
 		if (export_len > head->tx_buf_size || !head->fb_export_buf)
 			return;
 
-		/* Write framebuffer into tx_back (no lock needed — only we write here) */
-		memcpy(head->tx_back, export_vaddr, export_len);
+		/* Write tightly packed XRGB8888 into tx_back for userspace export. */
+		if (t6_pack_xrgb8888_tight(head,
+					  export_vaddr,
+					  export_stride,
+					  head->tx_back,
+					  head->tx_buf_size))
+			return;
 
 		/* Swap tx_back and fb_export_buf so the reader gets the fresh frame
 		 * while the next pipe_update writes to the other buffer.
@@ -1401,8 +1446,8 @@ static void t6_pipe_update(struct drm_simple_display_pipe *pipe,
 	 * Queue the latest full frame and let the worker perform USB I/O outside
 	 * the atomic commit path.
 	 */
-	frame_len = fb->pitches[0] * fb->height;
-	if (frame_len > head->tx_buf_size)
+	frame_len = (size_t)head->width * head->height * 4;
+	if (!fb->pitches[0] || frame_len > head->tx_buf_size)
 		return;
 
 	if (!drm_dev_enter(&t6->drm, &idx))
@@ -1410,8 +1455,17 @@ static void t6_pipe_update(struct drm_simple_display_pipe *pipe,
 
 	if (!mutex_trylock(&t6->tx_lock))
 		goto out_exit;
-	memcpy(head->tx_back, vaddr, frame_len);
+	ret = t6_pack_xrgb8888_tight(head,
+				   vaddr,
+				   fb->pitches[0],
+				   head->tx_back,
+				   head->tx_buf_size);
+	if (ret) {
+		mutex_unlock(&t6->tx_lock);
+		goto out_exit;
+	}
 	head->tx_len = frame_len;
+	head->tx_stride = head->width * 4;
 	head->tx_pending = true;
 	mutex_unlock(&t6->tx_lock);
 

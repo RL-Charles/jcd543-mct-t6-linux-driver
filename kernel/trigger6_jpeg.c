@@ -10,6 +10,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/mutex.h>
 #include <linux/string.h>
 
 #include "trigger6_jpeg.h"
@@ -37,6 +38,7 @@ static struct t6_jpeg_huff_table t6_jpeg_ac_luma_table;
 static struct t6_jpeg_huff_table t6_jpeg_dc_chroma_table;
 static struct t6_jpeg_huff_table t6_jpeg_ac_chroma_table;
 static bool t6_jpeg_huff_ready;
+static DEFINE_MUTEX(t6_jpeg_huff_lock);
 
 static const u8 t6_jpeg_zigzag[64] = {
 	0, 1, 5, 6, 14, 15, 27, 28,
@@ -250,6 +252,12 @@ static void t6_jpeg_init_huff_tables(void)
 	if (READ_ONCE(t6_jpeg_huff_ready))
 		return;
 
+	mutex_lock(&t6_jpeg_huff_lock);
+	if (READ_ONCE(t6_jpeg_huff_ready)) {
+		mutex_unlock(&t6_jpeg_huff_lock);
+		return;
+	}
+
 	t6_jpeg_build_huff(&t6_jpeg_dc_luma_table, t6_jpeg_dc_luma_bits,
 			   t6_jpeg_dc_luma_vals,
 			   ARRAY_SIZE(t6_jpeg_dc_luma_vals));
@@ -263,6 +271,7 @@ static void t6_jpeg_init_huff_tables(void)
 			   t6_jpeg_ac_chroma_vals,
 			   ARRAY_SIZE(t6_jpeg_ac_chroma_vals));
 	WRITE_ONCE(t6_jpeg_huff_ready, true);
+	mutex_unlock(&t6_jpeg_huff_lock);
 }
 
 static void t6_jpeg_build_qtable(const u8 *base, unsigned int quality, u8 *out)
