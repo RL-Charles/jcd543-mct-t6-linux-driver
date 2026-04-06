@@ -1,0 +1,12 @@
+[Unit]
+Description=Trigger6 JPEG relay for %i
+StopWhenUnneeded=yes
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/trigger6-jpeg-relay --device /dev/%i --relay-framebuffer --fps 15 --jpeg-quality 85
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

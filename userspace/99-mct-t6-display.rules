@@ -3,3 +3,6 @@
 
 # Grant desktop-session access via uaccess tag (no world-writable needed)
 SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5601", MODE="0660", TAG+="uaccess"
+
+# Auto-start the JPEG relay daemon when the kernel creates a misc device
+SUBSYSTEM=="misc", KERNEL=="trigger6-*-out1-jpeg", TAG+="systemd", ENV{SYSTEMD_WANTS}="trigger6-jpeg-relay@%k.service"

@@ -381,7 +381,9 @@ def main():
             print(path)
         return
 
-    mod = load_driver_module()
+    mod = None
+    if args.list_streams or (not args.test_pattern and not args.relay_framebuffer):
+        mod = load_driver_module()
     if args.list_streams:
         list_streams(mod)
         if not args.test_pattern and args.stream_index is None:
