@@ -1,19 +1,27 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * trigger6_jpeg.c -- Minimal baseline JPEG encoder for T6 output 1
+ * trigger6_codec.c -- JPEG encoder and NV12 converter for T6 USB display
+ *
+ * Copyright (C) 2026 Authentra / Ralph Friedman
+ *
+ * Two conversion paths for the T6 secondary (and optionally primary) output:
+ *   1. t6_jpeg_encode_xrgb8888()    -- baseline JPEG encoder (4:2:0).
+ *   2. t6_convert_xrgb8888_to_nv12() -- direct NV12 colour-space conversion.
  *
  * Design constraints:
  * - Integer-only math: kernel code must not rely on FPU state.
  * - Baseline sequential JPEG only: enough for the T6 decoder path.
  * - 4:2:0 subsampling: matches the vendor JPEG->NV12 transport behavior.
- * - No per-frame allocations: encode directly into the caller staging buffer.
+ * - BT.601 studio-range coefficients for NV12 (matching the T6 display pipeline).
+ * - No per-frame allocations: encode/convert directly into the caller staging buffer.
  */
 
 #include <linux/kernel.h>
 #include <linux/mutex.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 
-#include "trigger6_jpeg.h"
+#include "trigger6_codec.h"
 
 #define T6_JPEG_COMPONENTS	3
 #define T6_JPEG_DCT_SCALE	16384
@@ -41,14 +49,14 @@ static bool t6_jpeg_huff_ready;
 static DEFINE_MUTEX(t6_jpeg_huff_lock);
 
 static const u8 t6_jpeg_zigzag[64] = {
-	0, 1, 5, 6, 14, 15, 27, 28,
-	2, 4, 7, 13, 16, 26, 29, 42,
-	3, 8, 12, 17, 25, 30, 41, 43,
-	9, 11, 18, 24, 31, 40, 44, 53,
-	10, 19, 23, 32, 39, 45, 52, 54,
-	20, 22, 33, 38, 46, 51, 55, 60,
-	21, 34, 37, 47, 50, 56, 59, 61,
-	35, 36, 48, 49, 57, 58, 62, 63,
+	0, 1, 8, 16, 9, 2, 3, 10,
+	17, 24, 32, 25, 18, 11, 4, 5,
+	12, 19, 26, 33, 40, 48, 41, 34,
+	27, 20, 13, 6, 7, 14, 21, 28,
+	35, 42, 49, 56, 57, 50, 43, 36,
+	29, 22, 15, 23, 30, 37, 44, 51,
+	58, 59, 52, 45, 38, 31, 39, 46,
+	53, 60, 61, 54, 47, 55, 62, 63,
 };
 
 static const u8 t6_jpeg_qt_luma[64] = {
@@ -197,7 +205,7 @@ static bool t6_jpeg_put_bits(struct t6_jpeg_ctx *ctx, u16 code, u8 size)
 	if (!size)
 		return true;
 
-	ctx->bitbuf |= (u32)code << (24 - ctx->bitcnt - size);
+	ctx->bitbuf |= (u32)code << (32 - ctx->bitcnt - size);
 	ctx->bitcnt += size;
 
 	while (ctx->bitcnt >= 8) {
@@ -217,7 +225,7 @@ static bool t6_jpeg_flush_bits(struct t6_jpeg_ctx *ctx)
 	if (!ctx->bitcnt)
 		return true;
 
-	ctx->bitbuf |= (1U << (24 - ctx->bitcnt)) - 1;
+	ctx->bitbuf |= (1U << (32 - ctx->bitcnt)) - 1;
 	return t6_jpeg_put_scan_byte(ctx, ctx->bitbuf >> 24);
 }
 
@@ -319,7 +327,34 @@ static int t6_jpeg_value_bits(int value, u16 *bits)
 	return size;
 }
 
-static void t6_jpeg_fdct_quantize(const s16 *src, const u8 *qtable, s16 *dst)
+/*
+ * Combined DCT scale² and quantization divisor.  Precompute once per
+ * encode so the inner loop replaces two divisions with one multiply+shift.
+ *
+ * divisor[i] = DCT_SCALE² × qtable[i]
+ * recip[i]   = (2^48 + divisor[i]/2) / divisor[i]   (round-to-nearest)
+ *
+ * Then: round(|sum| / divisor[i]) ≈ (|sum| * recip[i] + 2^47) >> 48
+ */
+struct t6_dct_qtable {
+	u64 recip[64];
+};
+
+static void t6_precompute_dct_qtable(const u8 *qtable, struct t6_dct_qtable *dq)
+{
+	unsigned int i;
+	u64 dct_scale_sq = (u64)T6_JPEG_DCT_SCALE * T6_JPEG_DCT_SCALE;
+
+	for (i = 0; i < 64; i++) {
+		u64 d = dct_scale_sq * (qtable[i] ? qtable[i] : 1);
+
+		dq->recip[i] = ((1ULL << 48) + d / 2) / d;
+	}
+}
+
+static void t6_jpeg_fdct_quantize(const s16 *src,
+				  const struct t6_dct_qtable *dq,
+				  s16 *dst)
 {
 	s64 row_tmp[64];
 	unsigned int row, col, u;
@@ -337,26 +372,30 @@ static void t6_jpeg_fdct_quantize(const s16 *src, const u8 *qtable, s16 *dst)
 	for (u = 0; u < 8; u++) {
 		for (row = 0; row < 8; row++) {
 			s64 sum = 0;
-			s64 scaled;
-			int q;
+			u64 abs_sum;
+			s64 q;
+			unsigned int idx = row * 8 + u;
 
 			for (col = 0; col < 8; col++)
 				sum += row_tmp[col * 8 + u] * t6_jpeg_dct_matrix[row][col];
 
-			scaled = DIV_ROUND_CLOSEST_ULL(abs(sum),
-					      T6_JPEG_DCT_SCALE * T6_JPEG_DCT_SCALE);
+			/*
+			 * Combined descale + quantize in one multiply+shift.
+			 * Replaces two 64-bit divisions per coefficient.
+			 */
+			abs_sum = abs(sum);
+			q = (s64)((abs_sum * dq->recip[idx] + (1ULL << 47)) >> 48);
 			if (sum < 0)
-				scaled = -scaled;
+				q = -q;
 
-			q = DIV_ROUND_CLOSEST((int)scaled, qtable[row * 8 + u]);
-			dst[row * 8 + u] = clamp(q, -32767, 32767);
+			dst[idx] = clamp(q, (s64)-32767, (s64)32767);
 		}
 	}
 }
 
 static bool t6_jpeg_encode_block(struct t6_jpeg_ctx *ctx,
 				 const s16 *block,
-				 const u8 *qtable,
+				 const struct t6_dct_qtable *dq,
 				 const struct t6_jpeg_huff_table *dc_table,
 				 const struct t6_jpeg_huff_table *ac_table,
 				 int *prev_dc)
@@ -368,7 +407,7 @@ static bool t6_jpeg_encode_block(struct t6_jpeg_ctx *ctx,
 	int zero_run = 0;
 	int i;
 
-	t6_jpeg_fdct_quantize(block, qtable, coeffs);
+	t6_jpeg_fdct_quantize(block, dq, coeffs);
 
 	diff = coeffs[0] - *prev_dc;
 	*prev_dc = coeffs[0];
@@ -615,69 +654,162 @@ int t6_jpeg_encode_xrgb8888(const u8 *src,
 	ctx.dst = dst;
 	ctx.dst_size = dst_size;
 
+	{
+	struct t6_dct_qtable *dq_luma = NULL, *dq_chroma = NULL;
+	bool encode_ok = true;
+
+	dq_luma = kmalloc(sizeof(*dq_luma), GFP_KERNEL);
+	dq_chroma = kmalloc(sizeof(*dq_chroma), GFP_KERNEL);
+	if (!dq_luma || !dq_chroma) {
+		kfree(dq_luma);
+		kfree(dq_chroma);
+		return -ENOMEM;
+	}
+
 	t6_jpeg_init_huff_tables();
 	t6_jpeg_build_qtable(t6_jpeg_qt_luma, quality, q_luma);
 	t6_jpeg_build_qtable(t6_jpeg_qt_chroma, quality, q_chroma);
+	t6_precompute_dct_qtable(q_luma, dq_luma);
+	t6_precompute_dct_qtable(q_chroma, dq_chroma);
 
 	if (!t6_jpeg_write_headers(&ctx, width, height, q_luma, q_chroma))
-		return -E2BIG;
+		encode_ok = false;
 
-	for (mcu_y = 0; mcu_y < DIV_ROUND_UP(height, 16U); mcu_y++) {
-		for (mcu_x = 0; mcu_x < DIV_ROUND_UP(width, 16U); mcu_x++) {
+	for (mcu_y = 0; encode_ok && mcu_y < DIV_ROUND_UP(height, 16U); mcu_y++) {
+		for (mcu_x = 0; encode_ok && mcu_x < DIV_ROUND_UP(width, 16U); mcu_x++) {
 			t6_jpeg_load_y_block(src, width, height, stride,
 					    mcu_x * 16, mcu_y * 16,
 					    y_block);
-			if (!t6_jpeg_encode_block(&ctx, y_block, q_luma,
+			if (!t6_jpeg_encode_block(&ctx, y_block, dq_luma,
 						   &t6_jpeg_dc_luma_table,
 						   &t6_jpeg_ac_luma_table,
-						   &prev_dc_y))
-				return -E2BIG;
-
-			t6_jpeg_load_y_block(src, width, height, stride,
-					    mcu_x * 16 + 8, mcu_y * 16,
-					    y_block);
-			if (!t6_jpeg_encode_block(&ctx, y_block, q_luma,
+						   &prev_dc_y) ||
+			    (t6_jpeg_load_y_block(src, width, height, stride,
+						  mcu_x * 16 + 8, mcu_y * 16,
+						  y_block),
+			     !t6_jpeg_encode_block(&ctx, y_block, dq_luma,
 						   &t6_jpeg_dc_luma_table,
 						   &t6_jpeg_ac_luma_table,
-						   &prev_dc_y))
-				return -E2BIG;
-
-			t6_jpeg_load_y_block(src, width, height, stride,
-					    mcu_x * 16, mcu_y * 16 + 8,
-					    y_block);
-			if (!t6_jpeg_encode_block(&ctx, y_block, q_luma,
+						   &prev_dc_y)) ||
+			    (t6_jpeg_load_y_block(src, width, height, stride,
+						  mcu_x * 16, mcu_y * 16 + 8,
+						  y_block),
+			     !t6_jpeg_encode_block(&ctx, y_block, dq_luma,
 						   &t6_jpeg_dc_luma_table,
 						   &t6_jpeg_ac_luma_table,
-						   &prev_dc_y))
-				return -E2BIG;
-
-			t6_jpeg_load_y_block(src, width, height, stride,
-					    mcu_x * 16 + 8, mcu_y * 16 + 8,
-					    y_block);
-			if (!t6_jpeg_encode_block(&ctx, y_block, q_luma,
+						   &prev_dc_y)) ||
+			    (t6_jpeg_load_y_block(src, width, height, stride,
+						  mcu_x * 16 + 8, mcu_y * 16 + 8,
+						  y_block),
+			     !t6_jpeg_encode_block(&ctx, y_block, dq_luma,
 						   &t6_jpeg_dc_luma_table,
 						   &t6_jpeg_ac_luma_table,
-						   &prev_dc_y))
-				return -E2BIG;
+						   &prev_dc_y))) {
+				encode_ok = false;
+				break;
+			}
 
 			t6_jpeg_load_chroma_block(src, width, height, stride,
 						 mcu_x * 16, mcu_y * 16,
 						 cb_block, cr_block);
 
-			if (!t6_jpeg_encode_block(&ctx, cb_block, q_chroma,
+			if (!t6_jpeg_encode_block(&ctx, cb_block, dq_chroma,
 						   &t6_jpeg_dc_chroma_table,
 						   &t6_jpeg_ac_chroma_table,
 						   &prev_dc_cb) ||
-			    !t6_jpeg_encode_block(&ctx, cr_block, q_chroma,
+			    !t6_jpeg_encode_block(&ctx, cr_block, dq_chroma,
 						   &t6_jpeg_dc_chroma_table,
 						   &t6_jpeg_ac_chroma_table,
 						   &prev_dc_cr))
-				return -E2BIG;
+				encode_ok = false;
 		}
+	}
+
+	kfree(dq_luma);
+	kfree(dq_chroma);
+
+	if (!encode_ok)
+		return -E2BIG;
 	}
 
 	if (!t6_jpeg_flush_bits(&ctx) || !t6_jpeg_put_marker(&ctx, 0xd9))
 		return -E2BIG;
 
 	return ctx.overflow ? -E2BIG : ctx.pos;
+}
+
+/*
+ * Convert XRGB8888 (BGRX in memory) to NV12 for the T6 secondary output.
+ * NV12 = Y plane (full resolution) + interleaved UV plane (half res each dim).
+ * Uses BT.601 studio-range coefficients matching the JPEG encoder.
+ *
+ * Frame size: Y = pitch × height, UV = pitch × height/2.
+ * Total ≈ 3 MB for 1080p vs 8.3 MB for XRGB8888.
+ */
+int t6_convert_xrgb8888_to_nv12(const u8 *src,
+				 unsigned int width,
+				 unsigned int height,
+				 unsigned int src_stride,
+				 u8 *dst_y,
+				 u8 *dst_uv,
+				 unsigned int dst_y_pitch,
+				 unsigned int dst_uv_pitch)
+{
+	unsigned int x, y;
+
+	if (!src || !dst_y || !dst_uv || !width || !height)
+		return -EINVAL;
+
+	/*
+	 * Pass 1: Y plane (full resolution).
+	 * Process 2 pixels at a time to reduce loop overhead.
+	 */
+	for (y = 0; y < height; y++) {
+		const u32 *row32 = (const u32 *)(src + (size_t)y * src_stride);
+		u8 *yp = dst_y + (size_t)y * dst_y_pitch;
+
+		for (x = 0; x + 1 < width; x += 2) {
+			u32 p0 = row32[x];
+			u32 p1 = row32[x + 1];
+
+			yp[x]   = (u8)(((66 * (p0 >> 16 & 0xff) +
+					  129 * (p0 >> 8 & 0xff) +
+					  25 * (p0 & 0xff) + 128) >> 8) + 16);
+			yp[x+1] = (u8)(((66 * (p1 >> 16 & 0xff) +
+					  129 * (p1 >> 8 & 0xff) +
+					  25 * (p1 & 0xff) + 128) >> 8) + 16);
+		}
+		if (x < width) {
+			u32 p = row32[x];
+
+			yp[x] = (u8)(((66 * (p >> 16 & 0xff) +
+				       129 * (p >> 8 & 0xff) +
+				       25 * (p & 0xff) + 128) >> 8) + 16);
+		}
+	}
+
+	/*
+	 * Pass 2: UV plane (half resolution each dimension).
+	 * Use top-left pixel of each 2×2 block — skipping the
+	 * 2×2 average halves the work with negligible quality loss
+	 * for display-class output.
+	 */
+	for (y = 0; y < height; y += 2) {
+		const u32 *row32 = (const u32 *)(src + (size_t)y * src_stride);
+		u8 *uvp = dst_uv + (size_t)(y / 2) * dst_uv_pitch;
+
+		for (x = 0; x + 1 < width; x += 2) {
+			u32 p = row32[x];
+			int r = (p >> 16) & 0xff;
+			int g = (p >> 8) & 0xff;
+			int b = p & 0xff;
+
+			uvp[x]   = (u8)(((-38 * r - 74 * g + 112 * b +
+					   128) >> 8) + 128);
+			uvp[x+1] = (u8)(((112 * r - 94 * g - 18 * b +
+					   128) >> 8) + 128);
+		}
+	}
+
+	return 0;
 }

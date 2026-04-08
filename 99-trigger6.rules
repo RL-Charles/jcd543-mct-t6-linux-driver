@@ -1,0 +1,12 @@
+# /etc/udev/rules.d/99-trigger6.rules
+# MCT Trigger 6 (T6-688) USB Display Adapter
+# VID=0x0711 PID=0x5601 (StarTech USBC2HD4 and similar)
+
+# Grant logged-in desktop users access to the raw USB device
+SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5601", MODE="0660", TAG+="uaccess"
+
+# Set permissions for JPEG injection misc device
+KERNEL=="trigger6-*-jpeg", MODE="0660", GROUP="video"
+
+# Tag DRM device nodes for desktop session access
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="trigger6", TAG+="uaccess", TAG+="seat"

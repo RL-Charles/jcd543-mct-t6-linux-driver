@@ -23,3 +23,11 @@ tools/.vm-seeds/
 tools/.vm-keys/
 tools/.vm-tmp/
 tools/.host-tools/
+*.bak
+*.bak.*
+.*.o
+..*.o.cmd
+tools/.backups/
+tools/.baseline/
+tools/.canary/
+tools/.restore/
