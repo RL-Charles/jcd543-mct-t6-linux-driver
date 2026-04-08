@@ -333,7 +333,7 @@ static const struct drm_mode_config_funcs t6_mode_config_funcs = {
 };
 
 static const struct drm_mode_config_helper_funcs t6_mode_config_helper_funcs = {
-	.atomic_commit_tail = drm_atomic_helper_commit_tail,
+	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
 };
 
 static const unsigned int t6_reprobe_delays_ms[] = {
@@ -2167,7 +2167,7 @@ static ssize_t t6_jpeg_misc_read(struct file *file, char __user *buf,
 	if (drm_dev_is_unplugged(&t6->drm))
 		return -ENODEV;
 
-	/* Pairs with smp_wmb() in t6_pipe_update() after buffer swap */
+	/* Pairs with smp_wmb() in t6_plane_atomic_update() after buffer swap */
 	smp_rmb();
 
 	/* Grab the export buffer pointer under spinlock */
@@ -2672,6 +2672,8 @@ static void t6_crtc_atomic_enable(struct drm_crtc *crtc,
 	struct t6_device *t6 = head->t6;
 	int idx;
 
+	if (!crtc_state)
+		return;
 	if (!t6_head_runtime_connected(head))
 		return;
 
@@ -2819,6 +2821,8 @@ static int t6_crtc_atomic_check(struct drm_crtc *crtc,
 	struct drm_crtc_state *crtc_state =
 		drm_atomic_get_new_crtc_state(state, crtc);
 
+	if (!crtc_state)
+		return 0;
 	crtc_state->no_vblank = true;
 	return 0;
 }
@@ -2830,6 +2834,8 @@ static int t6_plane_atomic_check(struct drm_plane *plane,
 		drm_atomic_get_new_plane_state(state, plane);
 	struct drm_crtc_state *new_crtc_state = NULL;
 
+	if (!new_plane_state)
+		return 0;
 	if (new_plane_state->crtc)
 		new_crtc_state = drm_atomic_get_new_crtc_state(
 			state, new_plane_state->crtc);
@@ -3317,10 +3323,13 @@ static int t6_usb_probe(struct usb_interface *intf,
 			goto err_buffers;
 		drm_crtc_helper_add(&head->crtc, &t6_crtc_helper_funcs);
 
+		/* Set plane's possible_crtcs now that CRTC is initialized */
+		head->primary_plane.possible_crtcs = drm_crtc_mask(&head->crtc);
+
 		/* Encoder */
 		ret = drm_encoder_init(drm, &head->encoder,
 				       &t6_encoder_funcs,
-				       DRM_MODE_ENCODER_TMDS,
+				       DRM_MODE_ENCODER_VIRTUAL,
 				       "t6-encoder-%u",
 				       head->output_idx);
 		if (ret)
