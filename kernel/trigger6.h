@@ -28,7 +28,9 @@
 #include <linux/wait.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_device.h>
-#include <drm/drm_simple_kms_helper.h>
+#include <drm/drm_crtc.h>
+#include <drm/drm_plane.h>
+#include <drm/drm_encoder.h>
 
 #define T6_JPEG_QUALITY_DEFAULT	40
 #define T6_SCANOUT_WIDTH	1920
@@ -232,7 +234,9 @@ struct t6_head {
 	int edid_len;
 	enum t6_head_transport transport;
 
-	struct drm_simple_display_pipe pipe;
+	struct drm_crtc crtc;
+	struct drm_plane primary_plane;
+	struct drm_encoder encoder;
 	struct drm_connector connector;
 	struct work_struct tx_work;
 	struct delayed_work tx_defer_work;
@@ -327,9 +331,14 @@ static inline struct t6_head *t6_get_head(struct t6_device *t6,
 	return &t6->heads[idx];
 }
 
-static inline struct t6_head *t6_head_from_pipe(struct drm_simple_display_pipe *pipe)
+static inline struct t6_head *t6_head_from_crtc(struct drm_crtc *crtc)
 {
-	return container_of(pipe, struct t6_head, pipe);
+	return container_of(crtc, struct t6_head, crtc);
+}
+
+static inline struct t6_head *t6_head_from_plane(struct drm_plane *plane)
+{
+	return container_of(plane, struct t6_head, primary_plane);
 }
 
 static inline struct t6_head *t6_head_from_connector(struct drm_connector *connector)

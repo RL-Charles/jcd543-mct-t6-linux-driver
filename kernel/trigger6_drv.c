@@ -45,7 +45,11 @@
 #include <drm/drm_managed.h>
 #include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_probe_helper.h>
-#include <drm/drm_simple_kms_helper.h>
+#include <drm/drm_atomic.h>
+#include <drm/drm_crtc.h>
+#include <drm/drm_plane.h>
+#include <drm/drm_encoder.h>
+#include <drm/drm_gem_atomic_helper.h>
 
 #include "trigger6.h"
 #include "trigger6_codec.h"
@@ -2660,11 +2664,11 @@ static void t6_frame_work(struct work_struct *work)
  * ------------------------------------------------------------------
  */
 
-static void t6_pipe_enable(struct drm_simple_display_pipe *pipe,
-			   struct drm_crtc_state *crtc_state,
-			   struct drm_plane_state *plane_state)
+static void t6_crtc_atomic_enable(struct drm_crtc *crtc,
+				  struct drm_atomic_state *state)
 {
-	struct t6_head *head = t6_head_from_pipe(pipe);
+	struct t6_head *head = t6_head_from_crtc(crtc);
+	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
 	struct t6_device *t6 = head->t6;
 	int idx;
 
@@ -2764,9 +2768,10 @@ static void t6_pipe_enable(struct drm_simple_display_pipe *pipe,
 	drm_dev_exit(idx);
 }
 
-static void t6_pipe_disable(struct drm_simple_display_pipe *pipe)
+static void t6_crtc_atomic_disable(struct drm_crtc *crtc,
+				   struct drm_atomic_state *state)
 {
-	struct t6_head *head = t6_head_from_pipe(pipe);
+	struct t6_head *head = t6_head_from_crtc(crtc);
 	struct t6_device *t6 = head->t6;
 	int idx;
 
@@ -2808,28 +2813,48 @@ static void t6_pipe_disable(struct drm_simple_display_pipe *pipe)
  * fake vblank events so drm_atomic_helper_wait_for_flip_done() doesn't block
  * indefinitely.
  */
-static int t6_pipe_check(struct drm_simple_display_pipe *pipe,
-			 struct drm_plane_state *plane_state,
-			 struct drm_crtc_state *crtc_state)
+static int t6_crtc_atomic_check(struct drm_crtc *crtc,
+				struct drm_atomic_state *state)
 {
+	struct drm_crtc_state *crtc_state =
+		drm_atomic_get_new_crtc_state(state, crtc);
+
 	crtc_state->no_vblank = true;
 	return 0;
 }
 
-static void t6_pipe_update(struct drm_simple_display_pipe *pipe,
-			   struct drm_plane_state *old_state)
+static int t6_plane_atomic_check(struct drm_plane *plane,
+				 struct drm_atomic_state *state)
 {
-	struct drm_plane_state *state = pipe->plane.state;
+	struct drm_plane_state *new_plane_state =
+		drm_atomic_get_new_plane_state(state, plane);
+	struct drm_crtc_state *new_crtc_state = NULL;
+
+	if (new_plane_state->crtc)
+		new_crtc_state = drm_atomic_get_new_crtc_state(
+			state, new_plane_state->crtc);
+
+	return drm_atomic_helper_check_plane_state(new_plane_state,
+						   new_crtc_state,
+						   DRM_PLANE_NO_SCALING,
+						   DRM_PLANE_NO_SCALING,
+						   false,
+						   new_crtc_state &&
+						   new_crtc_state->enable);
+}
+
+static void t6_plane_atomic_update(struct drm_plane *plane,
+				   struct drm_atomic_state *atomic_state)
+{
+	struct drm_plane_state *state = drm_atomic_get_new_plane_state(atomic_state, plane);
 	struct drm_shadow_plane_state *shadow;
 	struct drm_framebuffer *fb;
-	struct t6_head *head = t6_head_from_pipe(pipe);
+	struct t6_head *head = t6_head_from_plane(plane);
 	struct t6_device *t6;
 	void *vaddr;
 	size_t frame_len;
 	int idx;
 	int ret;
-
-	(void)old_state;
 
 	if (!state)
 		return;
@@ -2891,7 +2916,7 @@ static void t6_pipe_update(struct drm_simple_display_pipe *pipe,
 		return;
 	}
 
-	t6 = to_t6(pipe->crtc.dev);
+	t6 = head->t6;
 	if (t6->manual_only)
 		return;
 	if (READ_ONCE(t6->io_faulted))
@@ -2970,12 +2995,36 @@ out_exit:
 	drm_dev_exit(idx);
 }
 
-static const struct drm_simple_display_pipe_funcs t6_pipe_funcs = {
-	.enable = t6_pipe_enable,
-	.disable = t6_pipe_disable,
-	.check = t6_pipe_check,
-	.update = t6_pipe_update,
-	DRM_GEM_SIMPLE_DISPLAY_PIPE_SHADOW_PLANE_FUNCS,
+static const struct drm_crtc_helper_funcs t6_crtc_helper_funcs = {
+	.atomic_enable = t6_crtc_atomic_enable,
+	.atomic_disable = t6_crtc_atomic_disable,
+	.atomic_check = t6_crtc_atomic_check,
+};
+
+static const struct drm_crtc_funcs t6_crtc_funcs = {
+	.reset = drm_atomic_helper_crtc_reset,
+	.destroy = drm_crtc_cleanup,
+	.set_config = drm_atomic_helper_set_config,
+	.page_flip = drm_atomic_helper_page_flip,
+	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
+};
+
+static const struct drm_plane_helper_funcs t6_plane_helper_funcs = {
+	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
+	.atomic_check = t6_plane_atomic_check,
+	.atomic_update = t6_plane_atomic_update,
+};
+
+static const struct drm_plane_funcs t6_plane_funcs = {
+	.update_plane = drm_atomic_helper_update_plane,
+	.disable_plane = drm_atomic_helper_disable_plane,
+	.destroy = drm_plane_cleanup,
+	DRM_GEM_SHADOW_PLANE_FUNCS,
+};
+
+static const struct drm_encoder_funcs t6_encoder_funcs = {
+	.destroy = drm_encoder_cleanup,
 };
 
 /* ------------------------------------------------------------------
@@ -3244,11 +3293,43 @@ static int t6_usb_probe(struct usb_interface *intf,
 		if (ret)
 			goto err_buffers;
 
-		ret = drm_simple_display_pipe_init(drm, &head->pipe,
-					   &t6_pipe_funcs,
-					   t6_formats,
-					   ARRAY_SIZE(t6_formats),
-					   NULL, &head->connector);
+		/* Primary plane */
+		ret = drm_universal_plane_init(drm, &head->primary_plane,
+					       0, &t6_plane_funcs,
+					       t6_formats,
+					       ARRAY_SIZE(t6_formats),
+					       NULL,
+					       DRM_PLANE_TYPE_PRIMARY,
+					       "t6-plane-%u",
+					       head->output_idx);
+		if (ret)
+			goto err_buffers;
+		drm_plane_helper_add(&head->primary_plane,
+				     &t6_plane_helper_funcs);
+
+		/* CRTC */
+		ret = drm_crtc_init_with_planes(drm, &head->crtc,
+						&head->primary_plane,
+						NULL, &t6_crtc_funcs,
+						"t6-crtc-%u",
+						head->output_idx);
+		if (ret)
+			goto err_buffers;
+		drm_crtc_helper_add(&head->crtc, &t6_crtc_helper_funcs);
+
+		/* Encoder */
+		ret = drm_encoder_init(drm, &head->encoder,
+				       &t6_encoder_funcs,
+				       DRM_MODE_ENCODER_TMDS,
+				       "t6-encoder-%u",
+				       head->output_idx);
+		if (ret)
+			goto err_buffers;
+		head->encoder.possible_crtcs = drm_crtc_mask(&head->crtc);
+
+		/* Attach encoder to connector */
+		ret = drm_connector_attach_encoder(&head->connector,
+						   &head->encoder);
 		if (ret)
 			goto err_buffers;
 	}
