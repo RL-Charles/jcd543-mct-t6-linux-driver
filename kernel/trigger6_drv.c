@@ -3388,6 +3388,14 @@ static int t6_usb_probe(struct usb_interface *intf,
 err_jpeg:
 	t6_unregister_jpeg_devices(t6);
 err_buffers:
+	/* Clean up any partially-initialized DRM objects */
+	for (head_idx = 0; head_idx < T6_OUTPUT_COUNT; head_idx++) {
+		struct t6_head *head = t6_get_head(t6, head_idx);
+
+		drm_encoder_cleanup(&head->encoder);
+		drm_crtc_cleanup(&head->crtc);
+		drm_plane_cleanup(&head->primary_plane);
+	}
 	cancel_delayed_work_sync(&t6->reprobe_work);
 	t6_cancel_head_activity(t6);
 	if (t6->wq) {
