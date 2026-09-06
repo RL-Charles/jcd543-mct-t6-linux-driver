@@ -49,13 +49,63 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_plane.h>
 #include <drm/drm_encoder.h>
-#include <drm/drm_gem_atomic_helper.h>
 
 #include "trigger6.h"
 #include "trigger6_codec.h"
 
 #define DRIVER_NAME	"trigger6"
-#define DRIVER_DESC	"MCT Trigger 6 USB Display"
+#define DRIVER_DESC	"JCD543 MCT Trigger 6 experimental USB display"
+
+static char *t6_device_path = "";
+module_param_named(device_path, t6_device_path, charp, 0444);
+MODULE_PARM_DESC(device_path,
+		 "Required exact USB port path (for example 2-3.4.1); empty refuses all devices");
+
+static unsigned int t6_output_mask;
+module_param_named(output_mask, t6_output_mask, uint, 0444);
+MODULE_PARM_DESC(output_mask,
+		 "Active test output: 1 selects logical head 0, 2 selects head 1; default 0 enables no output");
+
+/*
+ * A disconnect destroys per-device fault latches. The USB core may then probe
+ * a re-enumerated device automatically, including one restarting in firmware.
+ * Permit only one active probe attempt per insertion, even if that probe fails.
+ * Only a deliberate normal unload/reload may authorize another hardware test.
+ */
+static atomic_t t6_active_probe_used = ATOMIC_INIT(0);
+
+/* Selected-head IN queries only; manual_only still takes precedence. */
+static bool t6_query_only;
+module_param_named(query_only, t6_query_only, bool, 0444);
+MODULE_PARM_DESC(query_only,
+		 "Default false; selected-head RAM/status/valid-base-EDID queries only, no chip initialization, vendor OUT, DRM, or frames");
+
+static bool t6_query_timings;
+module_param_named(query_timings, t6_query_timings, bool, 0444);
+MODULE_PARM_DESC(query_timings,
+		 "Default false; query_only head 0 only, read timing count and at most 16 firmware timing records via EP0 IN; no mode changes");
+
+static bool t6_query_timing_page1;
+module_param_named(query_timing_page1, t6_query_timing_page1, bool, 0444);
+MODULE_PARM_DESC(query_timing_page1,
+		 "Default false; requires query_timings and count 36, read only records 16-31 at documented byte offset 512 instead of page 0");
+
+/*
+ * Aquamarine 0.14.0 gates generic renderless KMS on the exact DRM name "evdi".
+ * Explicit temporary experiment only: this implements no evdi private ABI.
+ * Module/USB driver names and the descriptor/path policy remain trigger6.
+ */
+static bool t6_aquamarine_evdi_name;
+module_param_named(aquamarine_evdi_name, t6_aquamarine_evdi_name, bool, 0444);
+MODULE_PARM_DESC(aquamarine_evdi_name,
+		 "Default false; head-0-only experimental DRM-name shim for Aquamarine 0.14.0 generic renderless KMS; not an evdi driver or private ABI");
+
+/* Fixed-rate, opt-in replay of a real raw frame; never boot-time priming. */
+static bool t6_raw_idle_refresh;
+module_param_named(raw_idle_refresh, t6_raw_idle_refresh, bool, 0444);
+MODULE_PARM_DESC(raw_idle_refresh,
+		 "Default false; head-0-only experiment replaying the last sent frame after 1s idle, only while CRTC active");
+#define T6_RAW_IDLE_REFRESH_MS	1000
 
 /*
  * Global mutex serialising USB bulk I/O across all T6 devices.
@@ -68,17 +118,17 @@ static bool t6_experimental_secondary_raw;
 module_param_named(experimental_secondary_raw,
 		   t6_experimental_secondary_raw,
 		   bool,
-		   0644);
+		   0444);
 MODULE_PARM_DESC(experimental_secondary_raw,
-		 "Force logical output 1 to use the raw XRGB8888 transport instead of the default NV12 path; uses double-buffered VRAM slots for tear-free display");
+		 "Inherited option; setting true is rejected for active JCD543 tests");
 
 static bool t6_secondary_userspace_jpeg;
 module_param_named(secondary_userspace_jpeg,
 		   t6_secondary_userspace_jpeg,
 		   bool,
-		   0644);
+		   0444);
 MODULE_PARM_DESC(secondary_userspace_jpeg,
-		 "Expose logical output 1 through DRM while userspace injects pre-encoded JPEG frames via /dev/trigger6-*-out1-jpeg");
+		 "Inherited option; setting true is rejected for active JCD543 tests");
 
 static unsigned int t6_jpeg_quality = T6_JPEG_QUALITY_DEFAULT;
 
@@ -106,7 +156,7 @@ static const struct kernel_param_ops t6_jpeg_quality_ops = {
 	.get = t6_jpeg_quality_get,
 };
 
-module_param_cb(jpeg_quality, &t6_jpeg_quality_ops, NULL, 0644);
+module_param_cb(jpeg_quality, &t6_jpeg_quality_ops, NULL, 0444);
 MODULE_PARM_DESC(jpeg_quality,
 		 "Baseline JPEG quality for logical output 1 when using the native in-kernel encoder (range: 1-100, default: "
 		 __stringify(T6_JPEG_QUALITY_DEFAULT) ")");
@@ -141,7 +191,7 @@ static const struct kernel_param_ops t6_frame_min_interval_ms_ops = {
 };
 
 module_param_cb(frame_min_interval_ms, &t6_frame_min_interval_ms_ops,
-		NULL, 0644);
+		NULL, 0444);
 MODULE_PARM_DESC(frame_min_interval_ms,
 		 "Legacy pacing gate in milliseconds (range: 0-1000, default: "
 		 __stringify(T6_FRAME_MIN_INTERVAL_MS_DEFAULT)
@@ -178,27 +228,27 @@ static const struct kernel_param_ops t6_secondary_frame_min_interval_ms_ops = {
 };
 
 module_param_cb(secondary_frame_min_interval_ms,
-		&t6_secondary_frame_min_interval_ms_ops, NULL, 0644);
+		&t6_secondary_frame_min_interval_ms_ops, NULL, 0444);
 MODULE_PARM_DESC(secondary_frame_min_interval_ms,
 		 "Upper cap for adaptive pacing on JPEG/NV12 secondary heads in milliseconds (range: 0-5000, default: "
 		 __stringify(T6_SECONDARY_FRAME_MIN_INTERVAL_MS_DEFAULT)
 		 "; 0 removes the cap and lets adaptive pacing run unconstrained)");
 
-static bool t6_manual_only;
+static bool t6_manual_only = true;
 module_param_named(manual_only,
 		   t6_manual_only,
 		   bool,
-		   0644);
+		   0444);
 MODULE_PARM_DESC(manual_only,
-		 "Keep DRM connectors disconnected and disable automatic scanout; allow only manual userspace JPEG injection and guarded probe logging. Default: false for full driver operation.");
+		 "Default true: match cached descriptors only, with no vendor USB requests, DRM device, workers, or scanout; reload with false and an explicit output_mask for an active test");
 
 static bool t6_serialize_usb_bus = true;
 module_param_named(serialize_usb_bus,
 		   t6_serialize_usb_bus,
 		   bool,
-		   0644);
+		   0444);
 MODULE_PARM_DESC(serialize_usb_bus,
-		 "Serialize bulk USB writes across all T6 devices. Disable experimentally to allow parallel multi-adapter transfers on hosts that tolerate interleaved bulk traffic.");
+		 "Serialize bulk USB writes; required true for active JCD543 tests");
 
 /*
  * Hardware init data captured from Windows USB traces.
@@ -222,107 +272,19 @@ static const u8 t6_init_timing_post[] = {
 };
 /*
  * Built-in display timing blobs (32 bytes each).
- * Format: pixel_clock(u32 LE kHz), refresh(u16), htotal(u16), hdisplay(u16),
+ * Format: pixel_clock(u32 LE kHz), refresh(u8), reserved(u8), htotal(u16), hdisplay(u16),
  *         hsync_start(u16), hsync_width(u16), vtotal(u16), vdisplay(u16),
  *         vsync_start(u16), vsync_width(u16), PLL FNUM(u16), FDEN(u16),
  *         IDIV(u8), OutputSelect(u8), hsync_pol(u8), vsync_pol(u8),
  *         reduced(u8), flags(u8)
  */
-static const u8 t6_mode_1080p[] = {	/* 1920x1080@60 CEA */
+/* Exact live firmware record 26 and JCD543 capture; see TIMING_QUERY.md. */
+static const u8 t6_mode_1080p[] = {
 	0x14, 0x44, 0x02, 0x00, 0x3c, 0x00, 0x98, 0x08,
-	0x80, 0x07, 0x18, 0x07, 0x2c, 0x00, 0x65, 0x04,
-	0x38, 0x04, 0xe8, 0x03, 0x1d, 0x00, 0xbb, 0x02,
+	0x80, 0x07, 0xd8, 0x07, 0x2c, 0x00, 0x65, 0x04,
+	0x38, 0x04, 0x3c, 0x04, 0x05, 0x00, 0xbb, 0x02,
 	0xe8, 0x03, 0x1d, 0x01, 0x01, 0x01, 0x00, 0x00,
 };
-
-static const u8 t6_mode_720p[] = {	/* 1280x720@60 CEA */
-	0x0a, 0x22, 0x01, 0x00, 0x3c, 0x00, 0x72, 0x06,
-	0x00, 0x05, 0x6e, 0x05, 0x28, 0x00, 0xee, 0x02,
-	0xd0, 0x02, 0xd5, 0x02, 0x05, 0x00, 0xbb, 0x02,
-	0xe8, 0x03, 0x1d, 0x02, 0x01, 0x01, 0x00, 0x00,
-};
-
-static const u8 t6_mode_1024x768[] = {	/* 1024x768@60 VESA DMT */
-	0xe8, 0xfd, 0x00, 0x00, 0x3c, 0x00, 0x40, 0x05,
-	0x00, 0x04, 0x18, 0x04, 0x88, 0x00, 0x26, 0x03,
-	0x00, 0x03, 0x03, 0x03, 0x06, 0x00, 0x00, 0x00,
-	0xe8, 0x03, 0x1a, 0x02, 0x00, 0x00, 0x00, 0x00,
-};
-
-static const u8 t6_mode_1600x900[] = {	/* 1600x900@60 CVT RB */
-	0xd6, 0x7d, 0x01, 0x00, 0x3c, 0x00, 0xe0, 0x06,
-	0x40, 0x06, 0x70, 0x06, 0x20, 0x00, 0x9e, 0x03,
-	0x84, 0x03, 0x87, 0x03, 0x05, 0x00, 0x64, 0x00,
-	0xe8, 0x03, 0x27, 0x02, 0x01, 0x00, 0x01, 0x00,
-};
-
-static const u8 t6_mode_1080p30[] = {	/* 1920x1080@30 */
-	0x0a, 0x22, 0x01, 0x00, 0x1e, 0x00, 0x98, 0x08,
-	0x80, 0x07, 0x18, 0x07, 0x2c, 0x00, 0x65, 0x04,
-	0x38, 0x04, 0xe8, 0x03, 0x1d, 0x00, 0xbb, 0x02,
-	0xe8, 0x03, 0x1d, 0x02, 0x01, 0x01, 0x00, 0x00,
-};
-
-static const u8 t6_mode_1280x1024[] = {	/* 1280x1024@60 VESA */
-	0xe0, 0xa5, 0x01, 0x00, 0x3c, 0x00, 0x98, 0x06,
-	0x00, 0x05, 0x30, 0x05, 0x70, 0x00, 0x2a, 0x04,
-	0x00, 0x04, 0x01, 0x04, 0x03, 0x00, 0x58, 0x02,
-	0xe8, 0x03, 0x15, 0x01, 0x01, 0x01, 0x00, 0x00,
-};
-
-static const u8 t6_mode_1280x800[] = {	/* 1280x800@60 CVT */
-	0x2c, 0x46, 0x01, 0x00, 0x3c, 0x00, 0x90, 0x06,
-	0x00, 0x05, 0x48, 0x05, 0x80, 0x00, 0x3f, 0x03,
-	0x20, 0x03, 0x23, 0x03, 0x06, 0x00, 0x90, 0x01,
-	0xe8, 0x03, 0x21, 0x02, 0x00, 0x01, 0x00, 0x00,
-};
-
-static const u8 t6_mode_800x600[] = {	/* 800x600@60 VESA */
-	0x40, 0x9c, 0x00, 0x00, 0x3c, 0x00, 0x20, 0x04,
-	0x20, 0x03, 0x48, 0x03, 0x80, 0x00, 0x74, 0x02,
-	0x58, 0x02, 0x59, 0x02, 0x04, 0x00, 0x00, 0x00,
-	0xe8, 0x03, 0x20, 0x00, 0x01, 0x01, 0x00, 0x00,
-};
-
-static const u8 t6_mode_640x480[] = {	/* 640x480@60 VGA */
-	0x57, 0x62, 0x00, 0x00, 0x3c, 0x00, 0x20, 0x03,
-	0x80, 0x02, 0x90, 0x02, 0x60, 0x00, 0x0d, 0x02,
-	0xe0, 0x01, 0xea, 0x01, 0x02, 0x00, 0x8c, 0x00,
-	0xe8, 0x03, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00,
-};
-
-/* All hardware-validated built-in modes */
-const struct t6_builtin_mode t6_builtin_modes[] = {
-	{ 1920, 1080, 60, t6_mode_1080p },
-	{ 1920, 1080, 30, t6_mode_1080p30 },
-	{ 1600,  900, 60, t6_mode_1600x900 },
-	{ 1280, 1024, 60, t6_mode_1280x1024 },
-	{ 1280,  800, 60, t6_mode_1280x800 },
-	{ 1280,  720, 60, t6_mode_720p },
-	{ 1024,  768, 60, t6_mode_1024x768 },
-	{  800,  600, 60, t6_mode_800x600 },
-	{  640,  480, 60, t6_mode_640x480 },
-};
-const int t6_builtin_mode_count = ARRAY_SIZE(t6_builtin_modes);
-
-static const u8 *t6_find_mode_blob(int width, int height, int refresh)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(t6_builtin_modes); i++) {
-		if (t6_builtin_modes[i].width == width &&
-		    t6_builtin_modes[i].height == height &&
-		    t6_builtin_modes[i].refresh == refresh)
-			return t6_builtin_modes[i].blob;
-	}
-	/* Fallback: match width+height ignoring refresh */
-	for (i = 0; i < ARRAY_SIZE(t6_builtin_modes); i++) {
-		if (t6_builtin_modes[i].width == width &&
-		    t6_builtin_modes[i].height == height)
-			return t6_builtin_modes[i].blob;
-	}
-	return NULL;
-}
 
 static const u32 t6_formats[] = { DRM_FORMAT_XRGB8888 };
 
@@ -336,21 +298,12 @@ static const struct drm_mode_config_helper_funcs t6_mode_config_helper_funcs = {
 	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
 };
 
-static const unsigned int t6_reprobe_delays_ms[] = {
-	200,
-	500,
-	1000,
-	3000,
-	5000,
-};
-
 static int t6_ctrl_out(struct t6_device *t6, u8 req, u16 val,
 		       u16 idx, const void *data, u16 size);
 static int t6_ctrl_in(struct t6_device *t6, u8 req, u16 val,
 		      u16 idx, void *data, u16 size);
 static bool t6_edid_base_block_valid(const u8 *edid);
 
-static void t6_schedule_reprobe(struct t6_device *t6);
 static void t6_trip_transport_fault(struct t6_device *t6,
 					 struct t6_head *head,
 					 int ret,
@@ -477,7 +430,7 @@ static ssize_t t6_metrics_show(struct device *dev,
 		if (len >= PAGE_SIZE - 256)
 			return len;
 		len += sysfs_emit_at(buf, len,
-			"head%u transport=%s connected=%u io_faulted=%u status=%u pending=%u width=%d height=%d frame_seq=%u\n",
+			"head%u transport=%s connected=%u io_faulted=%u status=%u pending=%u width=%d height=%d frame_seq=%u scanout_active=%u raw_idle_refresh=%u\n",
 			head->output_idx,
 			t6_transport_name(head->transport),
 			READ_ONCE(head->connected),
@@ -486,7 +439,9 @@ static ssize_t t6_metrics_show(struct device *dev,
 			head->tx_pending,
 			head->width,
 			head->height,
-			head->frame_seq);
+			head->frame_seq,
+			READ_ONCE(head->scanout_active),
+			t6_raw_idle_refresh && head->output_idx == 0);
 		len += sysfs_emit_at(buf, len,
 			"head%u queue_attempts=%lld queued_frames=%lld coalesced_overwrites=%lld skipped_frames=%lld pacing_defers=%lld transport_faults=%lld jpeg_quality=%u\n",
 			head->output_idx,
@@ -545,85 +500,10 @@ static ssize_t t6_metrics_show(struct device *dev,
 	return len;
 }
 
-static ssize_t t6_metrics_reset_store(struct device *dev,
-				      struct device_attribute *attr,
-				      const char *buf,
-				      size_t count)
-{
-	struct usb_interface *intf = to_usb_interface(dev);
-	struct t6_device *t6 = usb_get_intfdata(intf);
-	unsigned int i;
-	(void)attr;
-
-	if (!t6)
-		return -ENODEV;
-	if (!sysfs_streq(buf, "1") && !sysfs_streq(buf, "reset"))
-		return -EINVAL;
-
-	t6_reset_device_metrics(t6);
-	for (i = 0; i < T6_OUTPUT_COUNT; i++)
-		t6_reset_head_metrics(t6_get_head(t6, i));
-
-	return count;
-}
-
 static DEVICE_ATTR_RO(t6_metrics);
-static DEVICE_ATTR_WO(t6_metrics_reset);
-
-static ssize_t t6_head_enable_show(struct device *dev,
-				   struct device_attribute *attr, char *buf)
-{
-	struct usb_interface *intf = to_usb_interface(dev);
-	struct t6_device *t6 = usb_get_intfdata(intf);
-
-	if (!t6)
-		return -ENODEV;
-	return sysfs_emit(buf, "%u %u\n",
-			  READ_ONCE(t6_get_head(t6, 0)->connected) ? 1 : 0,
-			  READ_ONCE(t6_get_head(t6, 1)->connected) ? 1 : 0);
-}
-
-static ssize_t t6_head_enable_store(struct device *dev,
-				    struct device_attribute *attr,
-				    const char *buf, size_t count)
-{
-	struct usb_interface *intf = to_usb_interface(dev);
-	struct t6_device *t6 = usb_get_intfdata(intf);
-	unsigned int head_idx, enable;
-	struct t6_head *head;
-	int idx, ret;
-
-	if (!t6)
-		return -ENODEV;
-	if (sscanf(buf, "%u %u", &head_idx, &enable) != 2 ||
-	    head_idx >= T6_OUTPUT_COUNT || enable > 1)
-		return -EINVAL;
-
-	head = t6_get_head(t6, head_idx);
-	if (!drm_dev_enter(&t6->drm, &idx))
-		return -ENODEV;
-
-	ret = t6_ctrl_out(t6, T6_REQ_MONITOR_CTRL, head->output_idx,
-			  enable, NULL, 0);
-	drm_dev_exit(idx);
-
-	if (ret < 0)
-		return ret;
-
-	if (!enable) {
-		timer_delete_sync(&head->keepalive_timer);
-		cancel_delayed_work_sync(&head->boot_keepalive_work);
-	}
-
-	return count;
-}
-
-static DEVICE_ATTR_RW(t6_head_enable);
 
 static struct attribute *t6_attrs[] = {
 	&dev_attr_t6_metrics.attr,
-	&dev_attr_t6_metrics_reset.attr,
-	&dev_attr_t6_head_enable.attr,
 	NULL,
 };
 
@@ -677,6 +557,7 @@ static void t6_cancel_head_activity(struct t6_device *t6)
 	for (i = 0; i < T6_OUTPUT_COUNT; i++) {
 		struct t6_head *head = t6_get_head(t6, i);
 
+		WRITE_ONCE(head->scanout_active, false);
 		timer_delete_sync(&head->keepalive_timer);
 		cancel_delayed_work_sync(&head->boot_keepalive_work);
 		cancel_delayed_work_sync(&head->tx_defer_work);
@@ -756,6 +637,17 @@ static void t6_boot_keepalive_fn(struct work_struct *work);
 static void t6_frame_defer_work(struct work_struct *work);
 static void t6_frame_work(struct work_struct *work);
 
+static bool t6_raw_refresh_eligible(struct t6_head *head)
+{
+	struct t6_device *t6 = head->t6;
+
+	return t6_raw_refresh_allowed(t6_raw_idle_refresh,
+			head->output_idx == 0 && head->transport == T6_HEAD_TRANSPORT_RAW,
+			t6->manual_only, READ_ONCE(head->scanout_active),
+			READ_ONCE(head->connected), READ_ONCE(head->last_sent_valid),
+			READ_ONCE(t6->io_faulted) || READ_ONCE(head->io_faulted));
+}
+
 static void t6_head_defaults(struct t6_device *t6,
 			     struct t6_head *head,
 			     u8 output_idx)
@@ -825,11 +717,16 @@ static int t6_probe_head(struct t6_device *t6, struct t6_head *head)
 	int preferred_height = T6_SCANOUT_HEIGHT;
 	int ret;
 
+	if (!(t6->output_mask & (1U << head->output_idx)))
+		return 0;
+
 	ret = t6_ctrl_in(t6, T6_REQ_GET_STATUS, head->output_idx, 0, &status, 1);
 	if (ret < 1)
 		return ret < 0 ? ret : -EIO;
 
 	head->status = status;
+	dev_info(&t6->udev->dev, "Head %u raw connection status: 0x%02x\n",
+		 head->output_idx, status);
 	WRITE_ONCE(head->connected, status == 1);
 	if (!head->connected)
 		return 0;
@@ -839,6 +736,9 @@ static int t6_probe_head(struct t6_device *t6, struct t6_head *head)
 			 head->edid_data, 128);
 	if (ret >= 128 && t6_edid_base_block_valid(head->edid_data)) {
 		head->edid_len = 128;
+		/* Only the base block was fetched; never expose unfetched extensions. */
+		head->edid_data[127] += head->edid_data[126];
+		head->edid_data[126] = 0;
 		preferred_width = head->edid_data[0x38] |
 			((head->edid_data[0x3A] & 0xF0) << 4);
 		preferred_height = head->edid_data[0x3B] |
@@ -847,8 +747,6 @@ static int t6_probe_head(struct t6_device *t6, struct t6_head *head)
 			preferred_width = T6_SCANOUT_WIDTH;
 			preferred_height = T6_SCANOUT_HEIGHT;
 		}
-		preferred_width = clamp(preferred_width, 640, 1920);
-		preferred_height = clamp(preferred_height, 480, 1200);
 		t6_parse_edid_monitor_name(head);
 		if (preferred_width != T6_SCANOUT_WIDTH ||
 		    preferred_height != T6_SCANOUT_HEIGHT)
@@ -860,18 +758,73 @@ static int t6_probe_head(struct t6_device *t6, struct t6_head *head)
 				 T6_SCANOUT_WIDTH,
 				 T6_SCANOUT_HEIGHT,
 				 T6_SCANOUT_REFRESH_HZ);
-	} else if (ret >= 128) {
-		dev_warn(&t6->udev->dev,
-			 "Head %u returned an EDID block with invalid checksum; using fixed %dx%d mode assumptions\n",
-			 head->output_idx,
-			 T6_SCANOUT_WIDTH,
-			 T6_SCANOUT_HEIGHT);
+	} else {
+		dev_err(&t6->udev->dev,
+			"Head %u EDID unavailable or invalid; refusing active test\n",
+			head->output_idx);
+		return ret < 0 ? ret : -ENODEV;
 	}
 
 	head->width = T6_SCANOUT_WIDTH;
 	head->height = T6_SCANOUT_HEIGHT;
 
 	return 0;
+}
+
+/*
+ * MCT GPL t6.h/t6usbdongle.c: 0x84 gives a 4-byte count; 0x89 gives
+ * 32-byte RESOLUTIONTIMING records. Read only the first bounded page.
+ * Default wIndex is zero. An explicit continuation reads byte offset 512,
+ * as observed in cyrozap's public JCD543 trace whose page 0 matches this dock.
+ * No firmware record is applied to hardware or published as a DRM mode here.
+ */
+static int t6_query_head0_timings(struct t6_device *t6)
+{
+	struct t6_head *head = t6_get_head(t6, 0);
+	__le32 count_le;
+	unsigned int count, entries, i;
+	unsigned int first = t6_query_timing_page1 ? T6_RES_MAX_ENTRIES : 0;
+	u8 *table;
+	u16 size;
+	int ret;
+
+	if (!t6_query_only || !t6_query_timings || t6->output_mask != 1 ||
+	    !head->connected || head->status != 1 || head->edid_len != 128)
+		return -ENODEV;
+
+	ret = t6_ctrl_in(t6, T6_REQ_GET_RES_COUNT, 0, 0, &count_le, 4);
+	if (ret != 4)
+		return ret < 0 ? ret : -EIO;
+	count = le32_to_cpu(count_le);
+	if (t6_query_timing_page1 && count != 36) {
+		dev_err(&t6->udev->dev, "Timing continuation requires measured count 36\n");
+		return -EPROTO;
+	}
+	entries = t6_timing_query_entries(count - first);
+	if (!entries) {
+		dev_err(&t6->udev->dev, "Timing query returned zero records\n");
+		return -EPROTO;
+	}
+	size = entries * T6_RES_ENTRY_SIZE;
+	table = kmalloc(size, GFP_KERNEL);
+	if (!table)
+		return -ENOMEM;
+
+	ret = t6_ctrl_in(t6, T6_REQ_GET_RES_TABLE, 0,
+			first * T6_RES_ENTRY_SIZE, table, size);
+	if (ret == size) {
+		dev_info(&t6->udev->dev,
+			 "Timing query head 0: total=%u captured=%u bytes=%u start=%u; raw diagnostic only\n",
+			 count, entries, size, first);
+		for (i = 0; i < entries; i++)
+			dev_info(&t6->udev->dev, "T6 timing[%u]: %*phN\n", first + i,
+				 T6_RES_ENTRY_SIZE, table + i * T6_RES_ENTRY_SIZE);
+		ret = 0;
+	} else {
+		ret = ret < 0 ? ret : -EIO;
+	}
+	kfree(table);
+	return ret;
 }
 
 static int t6_alloc_head_buffers(struct t6_device *t6)
@@ -1210,32 +1163,38 @@ static void t6_stage_pending_head_locked(struct t6_head *head,
  * ------------------------------------------------------------------
  */
 
+static int t6_latch_io_error(struct t6_device *t6, int ret)
+{
+	WRITE_ONCE(t6->io_last_error, ret);
+	WRITE_ONCE(t6->io_faulted, true);
+	dev_err(&t6->udev->dev,
+		"USB error %d: traffic latched off; automatic reset disabled\n", ret);
+	return ret;
+}
+
 static int t6_ctrl_out(struct t6_device *t6, u8 req, u16 val,
 		       u16 idx, const void *data, u16 size)
 {
 	void *buf = NULL;
 	int ret;
 
-	if (size && data) {
+	if (t6_query_only)
+		return -EPERM;
+	if (t6->manual_only || READ_ONCE(t6->io_faulted))
+		return -EIO;
+	if (size) {
+		if (!data)
+			return -EINVAL;
 		buf = kmemdup(data, size, GFP_KERNEL);
 		if (!buf)
 			return -ENOMEM;
 	}
 	ret = usb_control_msg(t6->udev, usb_sndctrlpipe(t6->udev, 0),
 			      req, USB_TYPE_VENDOR | USB_DIR_OUT,
-			      val, idx, buf, size,
-			      T6_USB_CTRL_TIMEOUT_MS);
+			      val, idx, buf, size, T6_USB_CTRL_TIMEOUT_MS);
 	kfree(buf);
-	if (ret < 0) {
-		if (++t6->ctrl_error_count > T6_CTRL_ERROR_THRESHOLD) {
-			dev_err(&t6->udev->dev,
-				"Wedged: %u consecutive ctrl errors; scheduling USB reset\n",
-				t6->ctrl_error_count);
-			usb_queue_reset_device(t6->intf);
-		}
-	} else {
-		t6->ctrl_error_count = 0;
-	}
+	if (ret != size)
+		return t6_latch_io_error(t6, ret < 0 ? ret : -EIO);
 	return ret;
 }
 
@@ -1245,34 +1204,37 @@ static int t6_ctrl_in(struct t6_device *t6, u8 req, u16 val,
 	void *buf;
 	int ret;
 
+	if (t6->manual_only || READ_ONCE(t6->io_faulted))
+		return -EIO;
+	if (t6_query_only &&
+	    !t6_query_in_allowed(t6->output_mask, t6_query_timings,
+				t6_query_timing_page1, req, val, idx, size))
+		return -EPERM;
+	if (!size || !data)
+		return -EINVAL;
 	buf = kzalloc(size, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
-	memset(data, 0, size); /* zero caller's buffer in case of short read */
+	memset(data, 0, size);
 	ret = usb_control_msg(t6->udev, usb_rcvctrlpipe(t6->udev, 0),
 			      req, USB_TYPE_VENDOR | USB_DIR_IN,
-			      val, idx, buf, size,
-			      T6_USB_CTRL_TIMEOUT_MS);
-	if (ret >= 0) {
-		memcpy(data, buf, min_t(int, ret, size));
-		t6->ctrl_error_count = 0;
-	} else {
-		if (++t6->ctrl_error_count > T6_CTRL_ERROR_THRESHOLD) {
-			dev_err(&t6->udev->dev,
-				"Wedged: %u consecutive ctrl errors; scheduling USB reset\n",
-				t6->ctrl_error_count);
-			usb_queue_reset_device(t6->intf);
-		}
-	}
+			      val, idx, buf, size, T6_USB_CTRL_TIMEOUT_MS);
+	if (ret == size)
+		memcpy(data, buf, size);
 	kfree(buf);
+	if (ret != size)
+		return t6_latch_io_error(t6, ret < 0 ? ret : -EIO);
 	return ret;
 }
 
 static bool t6_edid_base_block_valid(const u8 *edid)
 {
+	static const u8 header[] = { 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00 };
 	u8 checksum = 0;
 	unsigned int idx;
 
+	if (memcmp(edid, header, sizeof(header)))
+		return false;
 	for (idx = 0; idx < 128; idx++)
 		checksum += edid[idx];
 
@@ -1288,6 +1250,10 @@ static int t6_bulk_write(struct t6_device *t6, const void *src, size_t len)
 	bool serialize_usb_bus;
 	int ret = 0;
 
+	if (t6_query_only)
+		return -EPERM;
+	if (t6->manual_only || READ_ONCE(t6->io_faulted))
+		return -EIO;
 	if (!len)
 		return 0;
 	if (!chunk_buf)
@@ -1305,6 +1271,10 @@ static int t6_bulk_write(struct t6_device *t6, const void *src, size_t len)
 		size_t chunk = min_t(size_t, T6_USB_XFER_CHUNK_SIZE, remaining);
 		int actual = 0;
 
+		if (READ_ONCE(t6->io_faulted)) {
+			ret = -EIO;
+			break;
+		}
 		atomic64_inc(&t6->metrics.bulk_chunks);
 		memcpy(chunk_buf, cursor, chunk);
 		ret = usb_bulk_msg(t6->udev,
@@ -1315,16 +1285,12 @@ static int t6_bulk_write(struct t6_device *t6, const void *src, size_t len)
 				   T6_USB_XFER_TIMEOUT_MS);
 		if (ret < 0) {
 			atomic64_inc(&t6->metrics.bulk_errors);
-			if (ret == -ETIMEDOUT) {
-				dev_err(&t6->udev->dev,
-					"USB bulk write timed out; scheduling device reset\n");
-				usb_queue_reset_device(t6->intf);
-			}
+			t6_latch_io_error(t6, ret);
 			break;
 		}
 		if (actual != chunk) {
 			atomic64_inc(&t6->metrics.bulk_short_writes);
-			ret = -EIO;
+			ret = t6_latch_io_error(t6, -EIO);
 			break;
 		}
 
@@ -1359,7 +1325,7 @@ static int t6_chip_init(struct t6_device *t6)
 		}
 	}
 	if (!any_connected)
-		init_head[0] = true;
+		return -ENODEV;
 
 	ret = t6_ctrl_out(t6, T6_REQ_RESET_LO, 0x0000, 0, NULL, 0);
 	if (ret < 0)
@@ -1624,7 +1590,7 @@ static int t6_send_frame_raw(struct t6_device *t6, struct t6_head *head,
 	}
 
 	/* Update the damage reference frame */
-	if (head->last_sent_frame) {
+	if (head->last_sent_frame && pixels != head->last_sent_frame) {
 		if (dmg && !dmg->full_frame) {
 			for (i = 0; i < dmg->num_ranges; i++) {
 				u32 offset = dmg->ranges[i].y_start * stride;
@@ -1636,8 +1602,12 @@ static int t6_send_frame_raw(struct t6_device *t6, struct t6_head *head,
 		} else {
 			memcpy(head->last_sent_frame, src, frame_size);
 		}
-		head->last_sent_valid = true;
+		WRITE_ONCE(head->last_sent_valid, true);
 	}
+	WRITE_ONCE(head->raw_last_sent_jiffies, jiffies);
+	if (t6_raw_refresh_eligible(head))
+		mod_timer(&head->keepalive_timer,
+			  jiffies + msecs_to_jiffies(T6_RAW_IDLE_REFRESH_MS));
 
 	head->frame_seq++;
 	atomic64_inc(&head->metrics.sent_frames);
@@ -1804,9 +1774,23 @@ static void t6_keepalive_timeout(struct timer_list *t)
 {
 	struct t6_head *head = container_of(t, struct t6_head, keepalive_timer);
 
-	if (!READ_ONCE(head->connected) || READ_ONCE(head->io_faulted) ||
-	    !head->last_jpeg_data)
+	if (!READ_ONCE(head->connected) || !READ_ONCE(head->scanout_active) ||
+	    READ_ONCE(head->io_faulted) || READ_ONCE(head->t6->io_faulted))
 		return;
+	if (head->transport == T6_HEAD_TRANSPORT_RAW) {
+		unsigned long deadline = READ_ONCE(head->raw_last_sent_jiffies) +
+			msecs_to_jiffies(T6_RAW_IDLE_REFRESH_MS);
+
+		if (!t6_raw_refresh_eligible(head))
+			return;
+		/* A real frame may have postponed the deadline during this callback. */
+		if (time_before(jiffies, deadline)) {
+			mod_timer(&head->keepalive_timer, deadline);
+			return;
+		}
+	} else if (!head->last_jpeg_data) {
+		return;
+	}
 
 	WRITE_ONCE(head->keepalive_due, true);
 	t6_queue_head_tx_work(head);
@@ -2294,16 +2278,12 @@ static void t6_trip_transport_fault(struct t6_device *t6,
 	dev_err(&t6->udev->dev,
 		"Halting T6 frame traffic on output %u after %s transport error: %d\n",
 		head->output_idx, source, ret);
+	WRITE_ONCE(t6->io_last_error, ret);
+	WRITE_ONCE(t6->io_faulted, true);
 	dev_err(&t6->udev->dev,
-		"Output %u disabled; auto-recovery scheduled in 60s\n",
-		head->output_idx);
-
-	if (!drm_dev_is_unplugged(&t6->drm)) {
+		"Traffic remains stopped until a deliberate unplug/reload; no automatic USB reset or recovery\n");
+	if (!drm_dev_is_unplugged(&t6->drm))
 		drm_kms_helper_hotplug_event(&t6->drm);
-		/* Schedule auto-recovery reprobe after 60 seconds */
-		schedule_delayed_work(&t6->reprobe_work,
-				      msecs_to_jiffies(T6_FAULT_RECOVERY_DELAY_MS));
-	}
 }
 
 static void t6_update_connector_status(struct t6_head *head)
@@ -2352,130 +2332,6 @@ static void t6_log_head(struct t6_head *head)
 			 head->output_idx);
 }
 
-static bool t6_any_head_disconnected(struct t6_device *t6)
-{
-	unsigned int idx;
-
-	for (idx = 0; idx < T6_OUTPUT_COUNT; idx++) {
-		if (!t6_get_head(t6, idx)->connected)
-			return true;
-	}
-
-	return false;
-}
-
-static void t6_reprobe_work(struct work_struct *work)
-{
-	struct t6_device *t6 = container_of(to_delayed_work(work),
-					   struct t6_device,
-					   reprobe_work);
-	bool any_new_connection = false;
-	bool changed = false;
-	unsigned int idx;
-	int enter_idx;
-	int ret;
-
-	/*
-	 * Auto-recover from transport faults: clear io_faulted on all
-	 * heads and retry.  This allows the driver to resume after
-	 * transient USB errors without requiring a module reload.
-	 */
-	if (READ_ONCE(t6->io_faulted)) {
-		WRITE_ONCE(t6->io_faulted, false);
-		for (idx = 0; idx < T6_OUTPUT_COUNT; idx++)
-			WRITE_ONCE(t6_get_head(t6, idx)->io_faulted, false);
-		dev_info(&t6->udev->dev,
-			 "Auto-clearing transport faults; attempting recovery\n");
-	}
-
-	if (!drm_dev_enter(&t6->drm, &enter_idx))
-		return;
-
-	mutex_lock(&t6->io_lock);
-	for (idx = 0; idx < T6_OUTPUT_COUNT; idx++) {
-		struct t6_head *head = t6_get_head(t6, idx);
-		bool was_connected = head->connected;
-		int old_width = head->width;
-		int old_height = head->height;
-		char old_name[sizeof(head->monitor_name)];
-
-		memcpy(old_name, head->monitor_name, sizeof(old_name));
-		ret = t6_probe_head(t6, head);
-		if (ret < 0) {
-			dev_warn(&t6->udev->dev,
-				 "Deferred head %u probe failed: %d\n",
-				 head->output_idx, ret);
-			continue;
-		}
-
-		if (!was_connected && head->connected)
-			any_new_connection = true;
-
-		if (was_connected != head->connected ||
-		    old_width != head->width ||
-		    old_height != head->height ||
-		    strncmp(old_name, head->monitor_name, sizeof(old_name)))
-			changed = true;
-	}
-
-	if (any_new_connection) {
-		ret = t6_chip_init(t6);
-		if (ret < 0)
-			dev_warn(&t6->udev->dev,
-				 "Deferred chip re-init failed after late head detection: %d\n",
-				 ret);
-		else
-			changed = true;
-	}
-
-	for (idx = 0; idx < T6_OUTPUT_COUNT; idx++) {
-		struct t6_head *head = t6_get_head(t6, idx);
-
-		t6_update_connector_status(head);
-		if (head->connected) {
-			if (!head->jpeg_misc_registered) {
-				ret = t6_register_jpeg_device(head);
-				if (ret < 0)
-					dev_warn(&t6->udev->dev,
-						 "Failed to register deferred JPEG device for output %u: %d\n",
-						 head->output_idx, ret);
-			}
-			if (changed)
-				t6_log_head(head);
-		} else {
-			t6_unregister_jpeg_device(head);
-		}
-	}
-	mutex_unlock(&t6->io_lock);
-	drm_dev_exit(enter_idx);
-
-	if (drm_dev_is_unplugged(&t6->drm))
-		return;
-
-	if (changed)
-		t6->reprobe_attempt = 0;
-
-	if (changed)
-		drm_kms_helper_hotplug_event(&t6->drm);
-
-	if (t6_any_head_disconnected(t6))
-		t6_schedule_reprobe(t6);
-}
-
-static void t6_schedule_reprobe(struct t6_device *t6)
-{
-	unsigned int delay_ms;
-
-	if (t6->reprobe_attempt >= ARRAY_SIZE(t6_reprobe_delays_ms) - 1) {
-		delay_ms = t6_reprobe_delays_ms[ARRAY_SIZE(t6_reprobe_delays_ms) - 1];
-		t6->reprobe_attempt = ARRAY_SIZE(t6_reprobe_delays_ms) - 1;
-	} else {
-		delay_ms = t6_reprobe_delays_ms[t6->reprobe_attempt++];
-	}
-	schedule_delayed_work(&t6->reprobe_work,
-			      msecs_to_jiffies(delay_ms));
-}
-
 static void t6_frame_defer_work(struct work_struct *work)
 {
 	struct t6_head *head = container_of(to_delayed_work(work),
@@ -2505,7 +2361,8 @@ static void t6_frame_work(struct work_struct *work)
 
 	mutex_lock(&t6->tx_lock);
 	if (!t6_pop_pending_frame_locked(head, &len, &queued_ns)) {
-		if (READ_ONCE(head->keepalive_due) && head->last_jpeg_data) {
+		if (READ_ONCE(head->keepalive_due) &&
+		    (head->last_jpeg_data || t6_raw_refresh_eligible(head))) {
 			WRITE_ONCE(head->keepalive_due, false);
 			keepalive_due = true;
 		} else {
@@ -2585,17 +2442,15 @@ static void t6_frame_work(struct work_struct *work)
 
 	if (keepalive_due) {
 		if (head->transport == T6_HEAD_TRANSPORT_RAW) {
-			/* Raw keepalive: re-send cached frame to fb_addr */
-			struct t6_bulk_header ka_bch;
+			unsigned long deadline = READ_ONCE(head->raw_last_sent_jiffies) +
+				msecs_to_jiffies(T6_RAW_IDLE_REFRESH_MS);
 
-			memset(&ka_bch, 0, sizeof(ka_bch));
-			ka_bch.payload_length = cpu_to_le32(head->last_jpeg_len);
-			ka_bch.payload_address = cpu_to_le32(head->fb_addr);
-			ka_bch.packet_length = cpu_to_le32(head->last_jpeg_len);
-			ret = t6_bulk_write(t6, &ka_bch, sizeof(ka_bch));
-			if (!ret)
-				ret = t6_bulk_write(t6, head->last_jpeg_data,
-						    head->last_jpeg_len);
+			/* Recheck under io_lock: disable or a newer frame may have won. */
+			if (!t6_raw_refresh_eligible(head) || time_before(jiffies, deadline))
+				goto unlock_io;
+			/* Reuse the normal full-frame protocol, never a cached black primer. */
+			ret = t6_send_frame_raw(t6, head, head->last_sent_frame,
+					       (size_t)head->width * head->height * 4, NULL);
 		} else if (head->transport == T6_HEAD_TRANSPORT_NV12) {
 			/* NV12 keepalive: re-send cached frame to fb slot */
 			struct t6_bulk_header ka_bch;
@@ -2629,6 +2484,7 @@ static void t6_frame_work(struct work_struct *work)
 	} else {
 		ret = t6_send_prepared_jpeg_cmd(t6, head, encoded_len);
 	}
+unlock_io:
 	mutex_unlock(&t6->io_lock);
 	drm_dev_exit(idx);
 
@@ -2684,89 +2540,23 @@ static void t6_crtc_atomic_enable(struct drm_crtc *crtc,
 	if (!drm_dev_enter(&t6->drm, &idx))
 		return;
 
-	/*
-	 * Switch resolution if compositor requested a different mode.
-	 * The T6 chip requires the full timing sequence around any
-	 * resolution change — SET_TIMING pre, per-head SET_RESOLUTION
-	 * for ALL heads, SET_TIMING post, FINALIZE.  Sending only
-	 * SET_RESOLUTION crashes the sibling head on the same chip.
-	 */
-	{
-		struct drm_display_mode *mode = &crtc_state->mode;
-		int new_w = mode->hdisplay;
-		int new_h = mode->vdisplay;
-
-		if (new_w && new_h &&
-		    (new_w != head->width || new_h != head->height)) {
-			const u8 *blob = t6_find_mode_blob(new_w, new_h,
-					drm_mode_vrefresh(mode));
-
-			if (blob) {
-				unsigned int hi;
-				int ret;
-
-				/* Full chip timing sequence */
-				t6_ctrl_out(t6, T6_REQ_SET_TIMING, 0, 0,
-					    t6_init_timing_pre,
-					    sizeof(t6_init_timing_pre));
-
-				/* Re-send resolution for ALL heads */
-				for (hi = 0; hi < T6_OUTPUT_COUNT; hi++) {
-					struct t6_head *h =
-						t6_get_head(t6, hi);
-					const u8 *hblob;
-
-					if (h == head)
-						hblob = blob;
-					else
-						hblob = t6_find_mode_blob(
-							h->width, h->height,
-							T6_SCANOUT_REFRESH_HZ);
-					if (!hblob)
-						continue;
-					t6_ctrl_out(t6,
-						    T6_REQ_SET_RESOLUTION,
-						    h->output_idx, 0,
-						    hblob, T6_RES_ENTRY_SIZE);
-					t6_ctrl_out(t6, T6_REQ_SET_READY,
-						    h->output_idx, 0,
-						    NULL, 0);
-				}
-
-				t6_ctrl_out(t6, T6_REQ_SET_TIMING, 0, 0,
-					    t6_init_timing_post,
-					    sizeof(t6_init_timing_post));
-				ret = t6_ctrl_out(t6, T6_REQ_FINALIZE,
-						  0x0002, 0, NULL, 0);
-
-				if (ret >= 0) {
-					mutex_lock(&t6->tx_lock);
-					head->width = new_w;
-					head->height = new_h;
-					head->last_sent_valid = false;
-					mutex_unlock(&t6->tx_lock);
-					dev_info(&t6->udev->dev,
-						 "Output %u: mode changed to %dx%d\n",
-						 head->output_idx,
-						 new_w, new_h);
-				} else {
-					dev_warn(&t6->udev->dev,
-						 "Mode set %dx%d failed on output %u: %d\n",
-						 new_w, new_h,
-						 head->output_idx, ret);
-				}
-			}
-		}
-	}
+	mutex_lock(&t6->io_lock);
 
 	{
 		int ret = t6_ctrl_out(t6, T6_REQ_MONITOR_CTRL,
 				      head->output_idx, 1, NULL, 0);
-		if (ret < 0)
+		if (ret < 0) {
 			dev_warn(&t6->udev->dev,
 				 "Monitor enable failed on output %u: %d\n",
 				 head->output_idx, ret);
+		} else {
+			WRITE_ONCE(head->scanout_active, true);
+			if (t6_raw_refresh_eligible(head))
+				mod_timer(&head->keepalive_timer,
+					  jiffies + msecs_to_jiffies(T6_RAW_IDLE_REFRESH_MS));
+		}
 	}
+	mutex_unlock(&t6->io_lock);
 	drm_dev_exit(idx);
 }
 
@@ -2777,6 +2567,7 @@ static void t6_crtc_atomic_disable(struct drm_crtc *crtc,
 	struct t6_device *t6 = head->t6;
 	int idx;
 
+	WRITE_ONCE(head->scanout_active, false);
 	/*
 	 * Stop ALL frame activity before turning the output off.
 	 * Without this, the keepalive timer re-sends frames which
@@ -2786,7 +2577,10 @@ static void t6_crtc_atomic_disable(struct drm_crtc *crtc,
 	timer_delete_sync(&head->keepalive_timer);
 	cancel_delayed_work_sync(&head->tx_defer_work);
 	cancel_work_sync(&head->tx_work);
+	/* A worker already in flight may have rearmed before observing inactive. */
+	timer_delete_sync(&head->keepalive_timer);
 	WRITE_ONCE(head->keepalive_due, false);
+	WRITE_ONCE(head->last_sent_valid, false);
 
 	/* Clear cached keepalive data so no stale resend can occur */
 	kvfree(head->last_jpeg_data);
@@ -2799,6 +2593,7 @@ static void t6_crtc_atomic_disable(struct drm_crtc *crtc,
 	if (!drm_dev_enter(&t6->drm, &idx))
 		return;
 
+	mutex_lock(&t6->io_lock);
 	{
 		int ret = t6_ctrl_out(t6, T6_REQ_MONITOR_CTRL,
 				      head->output_idx, 0, NULL, 0);
@@ -2807,6 +2602,7 @@ static void t6_crtc_atomic_disable(struct drm_crtc *crtc,
 				 "Monitor disable failed on output %u: %d\n",
 				 head->output_idx, ret);
 	}
+	mutex_unlock(&t6->io_lock);
 	drm_dev_exit(idx);
 }
 
@@ -2823,6 +2619,11 @@ static int t6_crtc_atomic_check(struct drm_crtc *crtc,
 
 	if (!crtc_state)
 		return 0;
+	if (crtc_state->enable && !t6_mode_supported(&crtc_state->mode))
+		return -EINVAL;
+	if (crtc_state->active &&
+	    !t6_head_runtime_connected(t6_head_from_crtc(crtc)))
+		return -ENODEV;
 	crtc_state->no_vblank = true;
 	return 0;
 }
@@ -2836,6 +2637,12 @@ static int t6_plane_atomic_check(struct drm_plane *plane,
 
 	if (!new_plane_state)
 		return 0;
+	if (new_plane_state->fb &&
+	    (new_plane_state->src_x || new_plane_state->src_y ||
+	     new_plane_state->src_w != (T6_SCANOUT_WIDTH << 16) ||
+	     new_plane_state->src_h != (T6_SCANOUT_HEIGHT << 16) ||
+	     new_plane_state->crtc_x || new_plane_state->crtc_y))
+		return -EINVAL;
 	if (new_plane_state->crtc)
 		new_crtc_state = drm_atomic_get_new_crtc_state(
 			state, new_plane_state->crtc);
@@ -3017,6 +2824,7 @@ static const struct drm_crtc_funcs t6_crtc_funcs = {
 };
 
 static const struct drm_plane_helper_funcs t6_plane_helper_funcs = {
+	.prepare_fb = drm_gem_plane_helper_prepare_fb,
 	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
 	.atomic_check = t6_plane_atomic_check,
 	.atomic_update = t6_plane_atomic_update,
@@ -3050,10 +2858,59 @@ static const struct drm_driver t6_drm_driver = {
 	DRM_GEM_SHMEM_DRIVER_OPS,
 };
 
+/* Same generic DRM operations; only the reported DRM name/description differ. */
+static const struct drm_driver t6_aquamarine_drm_driver = {
+	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
+	.name = "evdi",
+	.desc = DRIVER_DESC " (temporary DRM-name shim; no evdi private ABI)",
+	.major = 1,
+	.minor = 0,
+	.fops = &t6_fops,
+	DRM_GEM_SHMEM_DRIVER_OPS,
+};
+
 /* ------------------------------------------------------------------
  * USB probe / disconnect
  * ------------------------------------------------------------------
  */
+
+/* Match cached descriptors only; no USB requests are made here. */
+static bool t6_match_interface(struct usb_interface *intf)
+{
+	struct usb_device *udev = interface_to_usbdev(intf);
+	struct usb_host_interface *alt = intf->cur_altsetting;
+	struct t6_usb_profile p = { };
+	unsigned int i;
+
+	if (!udev->actconfig || !alt || alt->desc.bNumEndpoints != 3)
+		return false;
+	p.vendor = le16_to_cpu(udev->descriptor.idVendor);
+	p.product = le16_to_cpu(udev->descriptor.idProduct);
+	p.revision = le16_to_cpu(udev->descriptor.bcdDevice);
+	p.device_class = udev->descriptor.bDeviceClass;
+	p.device_subclass = udev->descriptor.bDeviceSubClass;
+	p.device_protocol = udev->descriptor.bDeviceProtocol;
+	p.configurations = udev->descriptor.bNumConfigurations;
+	p.configuration = udev->actconfig->desc.bConfigurationValue;
+	p.interfaces = udev->actconfig->desc.bNumInterfaces;
+	p.interface_number = alt->desc.bInterfaceNumber;
+	p.alternate_setting = alt->desc.bAlternateSetting;
+	p.alternate_settings = intf->num_altsetting;
+	p.interface_class = alt->desc.bInterfaceClass;
+	p.interface_subclass = alt->desc.bInterfaceSubClass;
+	p.interface_protocol = alt->desc.bInterfaceProtocol;
+	p.superspeed = udev->speed == USB_SPEED_SUPER;
+	p.endpoint_count = alt->desc.bNumEndpoints;
+	for (i = 0; i < 3; i++) {
+		const struct usb_endpoint_descriptor *ep = &alt->endpoint[i].desc;
+
+		p.endpoints[i].address = ep->bEndpointAddress;
+		p.endpoints[i].attributes = ep->bmAttributes;
+		p.endpoints[i].max_packet = le16_to_cpu(ep->wMaxPacketSize);
+		p.endpoints[i].interval = ep->bInterval;
+	}
+	return t6_profile_matches(&p);
+}
 
 static int t6_usb_probe(struct usb_interface *intf,
 			const struct usb_device_id *id)
@@ -3065,7 +2922,52 @@ static int t6_usb_probe(struct usb_interface *intf,
 	int ret;
 	unsigned int head_idx;
 
-	t6 = devm_drm_dev_alloc(&intf->dev, &t6_drm_driver,
+	if (!t6_match_interface(intf))
+		return -ENODEV;
+	if (!t6_device_path[0] ||
+	    strcmp(t6_device_path, dev_name(&udev->dev))) {
+		dev_info(&intf->dev, "Refusing device: an exact device_path is required\n");
+		return -ENODEV;
+	}
+	if (t6_manual_only) {
+		usb_set_intfdata(intf, NULL);
+		dev_info(&intf->dev,
+			 "Descriptor-only match at %s; no vendor USB I/O, DRM registration, or scanout\n",
+			 t6_device_path);
+		return 0;
+	}
+	if (!t6_output_mask_valid(t6_output_mask) ||
+	    t6_experimental_secondary_raw || t6_secondary_userspace_jpeg ||
+	    !t6_serialize_usb_bus ||
+	    (t6_aquamarine_evdi_name && t6_output_mask != 1) ||
+	    (t6_raw_idle_refresh && t6_output_mask != 1)) {
+		dev_err(&intf->dev,
+			"Active test requires output_mask=1 or 2 (name shim/idle refresh: 1 only), default transports, and USB serialization\n");
+		return -EINVAL;
+	}
+	if (t6_query_timing_page1 && !t6_query_timings)
+		return -EINVAL;
+	if (t6_query_timings && (!t6_query_only || t6_output_mask != 1 ||
+				 t6_aquamarine_evdi_name || t6_raw_idle_refresh)) {
+		dev_err(&intf->dev,
+			"Timing query requires query_only=1, output_mask=1, and disabled name shim/idle refresh\n");
+		return -EINVAL;
+	}
+	if (atomic_cmpxchg(&t6_active_probe_used, 0, 1)) {
+		dev_err(&intf->dev,
+			"Active probe already attempted; refusing automatic re-enumeration until reviewed module reload\n");
+		return -ENODEV;
+	}
+	dev_warn(&intf->dev, "EXPERIMENTAL active test on logical output %u; 1080p60 only\n",
+		 t6_output_mask == 1 ? 0 : 1);
+
+	if (t6_aquamarine_evdi_name)
+		dev_warn(&intf->dev,
+			 "Experimental DRM name evdi for Aquamarine only; module remains trigger6, no evdi private ABI\n");
+
+	t6 = devm_drm_dev_alloc(&intf->dev,
+				t6_aquamarine_evdi_name ?
+				&t6_aquamarine_drm_driver : &t6_drm_driver,
 				struct t6_device, drm);
 	if (IS_ERR(t6))
 		return PTR_ERR(t6);
@@ -3074,6 +2976,7 @@ static int t6_usb_probe(struct usb_interface *intf,
 	t6->udev = usb_get_dev(udev);
 	t6->intf = intf;
 	t6->manual_only = t6_manual_only;
+	t6->output_mask = t6_output_mask;
 	t6->io_faulted = false;
 	t6->io_last_error = 0;
 	t6_reset_device_metrics(t6);
@@ -3093,8 +2996,8 @@ static int t6_usb_probe(struct usb_interface *intf,
 		goto err_put;
 	}
 	t6->ram_mb = le32_to_cpu(ram_le);
-	if (t6->ram_mb < 32 || t6->ram_mb > 512) {
-		dev_err(&intf->dev, "Unexpected T6 RAM size: %u MB\n",
+	if (t6->ram_mb != 58) {
+		dev_err(&intf->dev, "Unvalidated T6 RAM layout: %u MB (expected upstream 58 MB)\n",
 			t6->ram_mb);
 		ret = -ENODEV;
 		goto err_put;
@@ -3106,37 +3009,27 @@ static int t6_usb_probe(struct usb_interface *intf,
 
 		t6_head_defaults(t6, head, head_idx);
 		ret = t6_probe_head(t6, head);
-		if (ret < 0)
-			dev_warn(&intf->dev,
-				 "Head %u probe failed, using defaults: %d\n",
-				 head_idx, ret);
+		if (ret < 0) {
+			dev_err(&intf->dev, "Head %u probe failed: %d\n",
+				head_idx, ret);
+			goto err_put;
+		}
 	}
 
-	/*
-	 * Retry undetected heads in a tight poll loop before DRM
-	 * registration so the compositor sees all monitors in one
-	 * hotplug event instead of staggered appearances.
-	 */
-	if (t6_any_head_disconnected(t6)) {
-		unsigned long deadline = jiffies +
-			msecs_to_jiffies(T6_INITIAL_PROBE_WINDOW_MS);
+	if (t6_query_only) {
+		struct t6_head *head = t6_get_head(t6, t6_output_mask == 1 ? 0 : 1);
 
-		while (time_before(jiffies, deadline) &&
-		       t6_any_head_disconnected(t6)) {
-			msleep(T6_INITIAL_PROBE_RETRY_MS);
-			for (head_idx = 0; head_idx < T6_OUTPUT_COUNT;
-			     head_idx++) {
-				struct t6_head *head =
-					t6_get_head(t6, head_idx);
-				if (head->connected)
-					continue;
-				ret = t6_probe_head(t6, head);
-				if (ret >= 0 && head->connected)
-					dev_info(&intf->dev,
-						 "Head %u detected during probe window\n",
-						 head_idx);
-			}
+		if (t6_query_timings) {
+			ret = t6_query_head0_timings(t6);
+			if (ret)
+				goto err_put;
 		}
+		dev_info(&intf->dev,
+			 "Query-only head %u complete: raw status=0x%02x, valid EDID bytes=%d, monitor=%s; no vendor OUT, chip init, DRM, or frames\n",
+			 head->output_idx, head->status, head->edid_len, head->monitor_name);
+		/* Bind with NULL data, like descriptor-only mode; release USB/DMA refs. */
+		ret = 0;
+		goto err_put;
 	}
 
 	for (head_idx = 0; head_idx < T6_OUTPUT_COUNT; head_idx++) {
@@ -3158,8 +3051,6 @@ static int t6_usb_probe(struct usb_interface *intf,
 		goto err_buffers;
 	}
 
-	INIT_DELAYED_WORK(&t6->reprobe_work, t6_reprobe_work);
-	t6->reprobe_attempt = 0;
 	ret = t6_alloc_head_buffers(t6);
 	if (ret < 0) {
 		ret = -ENOMEM;
@@ -3173,112 +3064,6 @@ static int t6_usb_probe(struct usb_interface *intf,
 		goto err_buffers;
 	}
 
-	/* Query hardware resolution table AFTER chip init (non-fatal) */
-	{
-		u8 count = 0;
-
-		ret = t6_ctrl_in(t6, T6_REQ_GET_RES_COUNT, 0, 0, &count, 1);
-		if (ret >= 1 && count > 0 && count <= T6_RES_MAX_ENTRIES) {
-			t6->res_count = count;
-			ret = t6_ctrl_in(t6, T6_REQ_GET_RES_TABLE, 0, 0,
-					 t6->res_table, T6_RES_TABLE_SIZE);
-			if (ret >= (int)(count * T6_RES_ENTRY_SIZE))
-				dev_info(&intf->dev,
-					 "T6 reports %u hardware display modes\n",
-					 count);
-			else {
-				dev_info(&intf->dev,
-					 "T6 resolution table query returned short response\n");
-				t6->res_count = 0;
-			}
-		} else {
-			dev_dbg(&intf->dev,
-				"T6 resolution table not available (count=%d ret=%d)\n",
-				count, ret);
-			t6->res_count = 0;
-		}
-		ret = 0; /* non-fatal */
-	}
-
-	/*
-	 * Prime connected heads with black frames to stabilize the HDMI
-	 * signal.  Multi-output chips need a few frames to clear internal
-	 * buffers and lock the signal before real content arrives.
-	 * Prime secondary heads FIRST — they typically take longer to
-	 * lock the HDMI signal, so starting them earlier balances the
-	 * visual appearance (both monitors come up closer together).
-	 * Matches the triggerdm reference implementation.
-	 */
-	for (head_idx = T6_OUTPUT_COUNT; head_idx-- > 0; ) {
-		struct t6_head *head = t6_get_head(t6, head_idx);
-		struct t6_flip_header fh;
-		struct t6_bulk_header bch;
-		u32 stride = head->width * 4;
-		u32 frame_size = stride * head->height;
-		u32 total = sizeof(fh) + frame_size;
-		u8 *staging;
-		int frame;
-
-		if (!head->connected)
-			continue;
-
-		/* Pick the staging buffer for this head's transport */
-		staging = head->video_staging ? head->video_staging :
-			  head->jpeg_staging;
-		if (!staging || total > (head->video_staging ?
-					head->video_staging_size :
-					head->jpeg_staging_size))
-			continue;
-
-		/* Build a valid flip header for black frames */
-		memset(&fh, 0, sizeof(fh));
-		fh.command = cpu_to_le32(head->output_idx == 0 ?
-					T6_CMD_FLIP_PRIMARY :
-					T6_CMD_FLIP_SECONDARY);
-		fh.payload_size = cpu_to_le32(frame_size);
-		fh.target_format = cpu_to_le32(T6_FMT_RGB32);
-		fh.y_pitch = cpu_to_le16(stride);
-		fh.y_fb_offset = cpu_to_le32(head->fb_addr + sizeof(fh));
-		fh.source_format = cpu_to_le32(T6_FMT_RGB32);
-		fh.flag = T6_FLAG_RESET;
-		memset(staging, 0, total);
-		memcpy(staging, &fh, sizeof(fh));
-
-		for (frame = 0; frame < T6_PRIME_FRAME_COUNT; frame++) {
-			int bret;
-
-			memset(&bch, 0, sizeof(bch));
-			bch.payload_length = cpu_to_le32(total);
-			bch.payload_address = cpu_to_le32(head->fb_addr);
-			bch.packet_length = cpu_to_le32(total);
-			bret = t6_bulk_write(t6, &bch, sizeof(bch));
-			if (bret)
-				break;
-			bret = t6_bulk_write(t6, staging, total);
-			if (bret)
-				break;
-		}
-
-		/*
-		 * Cache the black frame for keepalive so the HDMI signal
-		 * stays alive until the compositor starts rendering.
-		 * Without this, the T6 chip blanks the output after ~2s
-		 * and the monitor loses signal for 20-30s.
-		 */
-		if (!head->last_jpeg_data)
-			head->last_jpeg_data = kvmalloc(total, GFP_KERNEL);
-		if (head->last_jpeg_data) {
-			memcpy(head->last_jpeg_data, staging, total);
-			head->last_jpeg_len = total;
-			/* Use boot keepalive (bypasses DRM state checks) */
-			if (t6->wq)
-				queue_delayed_work(t6->wq,
-					&head->boot_keepalive_work,
-					msecs_to_jiffies(
-						T6_BOOT_KEEPALIVE_INTERVAL_MS));
-		}
-	}
-
 	/* DRM mode config */
 	ret = drmm_mode_config_init(drm);
 	if (ret)
@@ -3288,8 +3073,8 @@ static int t6_usb_probe(struct usb_interface *intf,
 
 	drm->mode_config.min_width = 640;
 	drm->mode_config.min_height = 480;
-	drm->mode_config.max_width = 3840;
-	drm->mode_config.max_height = 2160;
+	drm->mode_config.max_width = T6_SCANOUT_WIDTH;
+	drm->mode_config.max_height = T6_SCANOUT_HEIGHT;
 	drm->mode_config.preferred_depth = 32;
 
 	for (head_idx = 0; head_idx < T6_OUTPUT_COUNT; head_idx++) {
@@ -3381,22 +3166,12 @@ static int t6_usb_probe(struct usb_interface *intf,
 	dev_info(&intf->dev,
 		 "T6 display ready with %u logical heads modeled\n",
 		 T6_OUTPUT_COUNT);
-	if (t6_any_head_disconnected(t6))
-		t6_schedule_reprobe(t6);
 	return 0;
 
 err_jpeg:
 	t6_unregister_jpeg_devices(t6);
 err_buffers:
-	/* Clean up any partially-initialized DRM objects */
-	for (head_idx = 0; head_idx < T6_OUTPUT_COUNT; head_idx++) {
-		struct t6_head *head = t6_get_head(t6, head_idx);
-
-		drm_encoder_cleanup(&head->encoder);
-		drm_crtc_cleanup(&head->crtc);
-		drm_plane_cleanup(&head->primary_plane);
-	}
-	cancel_delayed_work_sync(&t6->reprobe_work);
+	/* drmm_mode_config_init owns cleanup of successfully created objects. */
 	t6_cancel_head_activity(t6);
 	if (t6->wq) {
 		destroy_workqueue(t6->wq);
@@ -3404,6 +3179,7 @@ err_buffers:
 	}
 	t6_free_head_buffers(t6);
 err_put:
+	usb_set_intfdata(intf, NULL);
 	if (t6->dmadev)
 		put_device(t6->dmadev);
 	usb_put_dev(t6->udev);
@@ -3425,7 +3201,7 @@ static void t6_usb_disconnect(struct usb_interface *intf)
 	/*
 	 * Disconnect ordering:
 	 * 1. Unplug -- waits for in-progress drm_dev_enter, blocks new ones
-	 * 2. Cancel async work -- reprobe/hotplug must not run after unplug
+	 * 2. Cancel async frame work before releasing buffers
 	 * 3. Shutdown -- disables outputs (pipe_update guarded by drm_dev_enter)
 	 * 4. Tear down userspace-visible state and buffers
 	 * No poll_fini needed -- polling is disabled.
@@ -3433,7 +3209,6 @@ static void t6_usb_disconnect(struct usb_interface *intf)
 	drm_dev_unplug(&t6->drm);
 	/* Wake any userspace readers blocked on framebuffer export */
 	t6_wake_all_export_waiters(t6);
-	cancel_delayed_work_sync(&t6->reprobe_work);
 	t6_cancel_head_activity(t6);
 	if (t6->wq) {
 		flush_workqueue(t6->wq);
@@ -3463,7 +3238,8 @@ static int t6_usb_suspend(struct usb_interface *intf, pm_message_t message)
 	if (!t6)
 		return 0;
 
-	cancel_delayed_work_sync(&t6->reprobe_work);
+	WRITE_ONCE(t6->io_faulted, true);
+	WRITE_ONCE(t6->io_last_error, -EHOSTDOWN);
 	t6_cancel_head_activity(t6);
 
 	return 0;
@@ -3472,46 +3248,15 @@ static int t6_usb_suspend(struct usb_interface *intf, pm_message_t message)
 static int t6_usb_resume(struct usb_interface *intf)
 {
 	struct t6_device *t6 = usb_get_intfdata(intf);
-	unsigned int hi;
-	int ret;
 
 	if (!t6)
 		return 0;
-
-	/* Clear stale error state from before suspend */
-	WRITE_ONCE(t6->io_faulted, false);
-	t6->ctrl_error_count = 0;
-	for (hi = 0; hi < T6_OUTPUT_COUNT; hi++) {
-		struct t6_head *head = t6_get_head(t6, hi);
-
-		WRITE_ONCE(head->io_faulted, false);
-		head->last_sent_valid = false;
-	}
-
-	/* Re-init chip — T6 loses all state across USB suspend */
-	ret = t6_chip_init(t6);
-	if (ret < 0)
-		return ret;
-
-	/* Restart boot keepalive so monitors stay alive until
-	 * the compositor resumes rendering.
-	 */
-	for (hi = 0; hi < T6_OUTPUT_COUNT; hi++) {
-		struct t6_head *head = t6_get_head(t6, hi);
-
-		if (!READ_ONCE(head->connected) || !head->last_jpeg_data)
-			continue;
-		if (t6->wq)
-			queue_delayed_work(t6->wq,
-					   &head->boot_keepalive_work,
-					   msecs_to_jiffies(
-						T6_BOOT_KEEPALIVE_INTERVAL_MS));
-	}
-
-	/* Notify compositor to re-evaluate connectors */
+	WRITE_ONCE(t6->io_faulted, true);
+	WRITE_ONCE(t6->io_last_error, -EHOSTDOWN);
+	dev_warn(&intf->dev,
+		 "Resume leaves experimental outputs stopped; unplug/reload for a new test\n");
 	if (!drm_dev_is_unplugged(&t6->drm))
 		drm_kms_helper_hotplug_event(&t6->drm);
-
 	return 0;
 }
 
@@ -3521,7 +3266,7 @@ static int t6_usb_resume(struct usb_interface *intf)
  */
 
 static const struct usb_device_id t6_ids[] = {
-	{ USB_DEVICE(T6_VID, T6_PID) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(T6_VID, T6_PID, 0xff, 0, 0) },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, t6_ids);

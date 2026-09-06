@@ -32,23 +32,17 @@
 #include <drm/drm_plane.h>
 #include <drm/drm_encoder.h>
 
+#include "trigger6_match.h"
+#include "trigger6_refresh.h"
+#include "trigger6_query.h"
+
 #define T6_JPEG_QUALITY_DEFAULT	40
 #define T6_SCANOUT_WIDTH	1920
 #define T6_SCANOUT_HEIGHT	1080
 #define T6_SCANOUT_REFRESH_HZ	60
 
-/* USB IDs */
-#define T6_VID			0x0711
-#define T6_PID			0x5601
-
-/* USB endpoint */
-#define T6_EP_BULK_OUT		0x02
-
 /* USB control-message timeout (ms) — kept short to speed probe */
 #define T6_USB_CTRL_TIMEOUT_MS	1000
-
-/* Consecutive control-message failures before scheduling USB reset */
-#define T6_CTRL_ERROR_THRESHOLD	5
 
 /* Vendor requests */
 #define T6_REQ_MONITOR_CTRL	0x03
@@ -56,16 +50,6 @@
 #define T6_REQ_SET_COLOR	0x23
 #define T6_REQ_SET_TIMING	0x24
 #define T6_REQ_SET_READY	0x31
-#define T6_REQ_GET_EDID		0x80
-#define T6_REQ_GET_RES_COUNT	0x84
-#define T6_REQ_GET_STATUS	0x87
-#define T6_REQ_GET_RAM		0x88
-#define T6_REQ_GET_RES_TABLE	0x89
-
-/* Resolution timing table: up to 16 entries of 32 bytes each = 512 bytes */
-#define T6_RES_TABLE_SIZE	512
-#define T6_RES_ENTRY_SIZE	32
-#define T6_RES_MAX_ENTRIES	16
 #define T6_REQ_RESET_LO		0x1C  /* wValue=0x0000 */
 #define T6_REQ_RESET_HI		0x1C  /* wValue=0x0100 */
 #define T6_REQ_FINALIZE		0x1C  /* wValue=0x0002 */
@@ -110,15 +94,6 @@ struct t6_frame_damage {
 #define T6_KEEPALIVE_INTERVAL_MS	2000
 #define T6_BOOT_KEEPALIVE_INTERVAL_MS	1500
 
-/* Auto-recovery: clear io_faulted and reprobe after this delay */
-#define T6_FAULT_RECOVERY_DELAY_MS	60000
-
-/* Probe window: retry undetected heads before DRM registration */
-#define T6_INITIAL_PROBE_WINDOW_MS	500
-#define T6_INITIAL_PROBE_RETRY_MS	50
-
-/* HDMI signal priming: black frames to stabilize output after init */
-#define T6_PRIME_FRAME_COUNT		8
 #define T6_FRAME_MIN_INTERVAL_MS_DEFAULT	5	/* ignored for raw heads (damage tracking is the natural throttle) */
 #define T6_SECONDARY_FRAME_MIN_INTERVAL_MS_DEFAULT	250	/* adaptive pacing cap for JPEG/NV12 secondary heads */
 
@@ -217,6 +192,7 @@ struct t6_head {
 	u8 output_idx;
 	bool connected;
 	bool io_faulted;
+	bool scanout_active;
 	u8 status;
 	u32 fb_addr;
 	u32 cmd_addr;
@@ -261,6 +237,7 @@ struct t6_head {
 	/* Damage tracking: last-sent frame for row-level diffing (raw and NV12 heads) */
 	u8 *last_sent_frame;
 	bool last_sent_valid;
+	unsigned long raw_last_sent_jiffies;
 
 	/* Adaptive JPEG quality: 0 = use global param, else per-head */
 	unsigned int jpeg_adaptive_quality;
@@ -297,12 +274,7 @@ struct t6_device {
 	u32 ram_mb;
 	struct t6_head heads[T6_OUTPUT_COUNT];
 
-	/* Hardware resolution table queried from vendor request 0x89 */
-	u8 res_table[T6_RES_TABLE_SIZE];
-	u8 res_count;
-
 	/* Serialize frame staging and USB submission across both heads. */
-	struct delayed_work reprobe_work;
 	struct mutex tx_lock;
 	struct mutex io_lock;
 
@@ -310,11 +282,10 @@ struct t6_device {
 	struct workqueue_struct *wq;
 	struct t6_device_metrics metrics;
 	u8 tx_next_head;
-	unsigned int reprobe_attempt;
 	bool manual_only;
+	unsigned int output_mask;
 	bool io_faulted;
 	int io_last_error;
-	u32 ctrl_error_count;
 
 	/* Pre-allocated USB bulk transfer chunk buffer */
 	u8 *bulk_chunk;
@@ -361,7 +332,8 @@ static inline bool t6_head_scanout_supported(const struct t6_head *head)
 
 static inline bool t6_head_drm_scanout_enabled(const struct t6_head *head)
 {
-	return t6_head_scanout_supported(head) && !head->t6->manual_only;
+	return t6_head_scanout_supported(head) && !head->t6->manual_only &&
+	       (head->t6->output_mask & (1U << head->output_idx));
 }
 
 static inline bool t6_head_runtime_connected(const struct t6_head *head)
@@ -372,18 +344,8 @@ static inline bool t6_head_runtime_connected(const struct t6_head *head)
 	       !READ_ONCE(head->t6->io_faulted);
 }
 
-/* Built-in display modes */
-struct t6_builtin_mode {
-	u16 width;
-	u16 height;
-	u16 refresh;
-	const u8 *blob;
-};
-
-extern const struct t6_builtin_mode t6_builtin_modes[];
-extern const int t6_builtin_mode_count;
-
 /* connector */
 int t6_connector_init(struct t6_device *t6, struct t6_head *head);
+bool t6_mode_supported(const struct drm_display_mode *mode);
 
 #endif

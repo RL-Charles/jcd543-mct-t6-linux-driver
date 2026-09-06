@@ -18,7 +18,7 @@
 #include "trigger6.h"
 
 /*
- * Always return connected. Verified at probe time.
+ * Return cached connection state, including the selected output and fault latch.
  * No USB calls -- DRM polls this from contexts where USB deadlocks.
  */
 static enum drm_connector_status
@@ -31,112 +31,47 @@ t6_connector_detect(struct drm_connector *connector, bool force)
 }
 
 /*
- * Return a single mode matching the T6 chip's init timing.
- * No USB calls. No EDID parsing. Just a CVT mode.
+ * Fixed CEA mode, matching the live firmware's verified 32-byte timing record.
+ * The upstream dynamic mode table could exceed preallocated frame buffers.
  */
+static const struct drm_display_mode t6_1080p_mode = {
+	DRM_MODE("1920x1080", DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
+		 148500, 1920, 2008, 2052, 2200, 0,
+		 1080, 1084, 1089, 1125, 0,
+		 DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC),
+};
+
+bool t6_mode_supported(const struct drm_display_mode *mode)
+{
+	return drm_mode_equal(mode, &t6_1080p_mode);
+}
+
 static int t6_connector_get_modes(struct drm_connector *connector)
 {
 	struct t6_head *head = t6_head_from_connector(connector);
-	struct t6_device *t6 = head->t6;
 	struct drm_display_mode *mode;
 	struct edid *edid = (struct edid *)head->edid_data;
-	int count = 0;
-	int i;
 
 	if (!t6_head_runtime_connected(head))
 		return 0;
-
-	if (head->edid_len >= EDID_LENGTH && drm_edid_is_valid(edid)) {
+	if (head->edid_len == EDID_LENGTH && drm_edid_is_valid(edid)) {
 		drm_connector_update_edid_property(connector, edid);
-		/* Extract physical size for HiDPI scaling (EDID bytes 0x15-0x16 = cm) */
-		if (head->edid_data[0x15] && head->edid_data[0x16]) {
-			connector->display_info.width_mm = head->edid_data[0x15] * 10;
-			connector->display_info.height_mm = head->edid_data[0x16] * 10;
-		}
+		connector->display_info.width_mm = head->edid_data[0x15] * 10;
+		connector->display_info.height_mm = head->edid_data[0x16] * 10;
 	} else {
 		drm_connector_update_edid_property(connector, NULL);
 	}
-
-	/*
-	 * Advertise modes from the hardware resolution table (queried
-	 * via vendor request 0x89 at probe time).  Each 32-byte entry
-	 * encodes display timing; we extract width, height, refresh.
-	 * Fallback to fixed 1080p60 if no table was returned.
-	 */
-	if (t6->res_count > 0) {
-		for (i = 0; i < t6->res_count; i++) {
-			const u8 *entry = &t6->res_table[i * T6_RES_ENTRY_SIZE];
-			u16 width = le16_to_cpup((__le16 *)(entry + 8));
-			u16 height = le16_to_cpup((__le16 *)(entry + 16));
-			u16 refresh = le16_to_cpup((__le16 *)(entry + 4));
-
-			if (!width || !height || !refresh)
-				continue;
-
-			mode = drm_cvt_mode(connector->dev,
-					    width, height, refresh,
-					    false, false, false);
-			if (!mode)
-				continue;
-
-			mode->type |= DRM_MODE_TYPE_DRIVER;
-			if (width == T6_SCANOUT_WIDTH &&
-			    height == T6_SCANOUT_HEIGHT)
-				mode->type |= DRM_MODE_TYPE_PREFERRED;
-			drm_mode_probed_add(connector, mode);
-			count++;
-		}
-	}
-
-	/*
-	 * Offer all hardware-validated built-in modes.  Each has a
-	 * 32-byte timing blob that was tested on real T6 hardware.
-	 */
-	if (count == 0) {
-		for (i = 0; i < t6_builtin_mode_count; i++) {
-			mode = drm_cvt_mode(connector->dev,
-					    t6_builtin_modes[i].width,
-					    t6_builtin_modes[i].height,
-					    t6_builtin_modes[i].refresh,
-					    false, false, false);
-			if (!mode)
-				continue;
-			mode->type |= DRM_MODE_TYPE_DRIVER;
-			if (t6_builtin_modes[i].width == T6_SCANOUT_WIDTH &&
-			    t6_builtin_modes[i].height == T6_SCANOUT_HEIGHT)
-				mode->type |= DRM_MODE_TYPE_PREFERRED;
-			drm_mode_probed_add(connector, mode);
-			count++;
-		}
-	}
-
-	return count;
+	mode = drm_mode_duplicate(connector->dev, &t6_1080p_mode);
+	if (!mode)
+		return 0;
+	drm_mode_probed_add(connector, mode);
+	return 1;
 }
 
-/*
- * Accept any mode that the hardware reported in its resolution table,
- * or the fixed 1080p60 fallback.  Reject anything else to prevent
- * sending timing data the T6 chip can't handle.
- */
 static enum drm_mode_status
 t6_connector_mode_valid_common(const struct drm_display_mode *mode)
 {
-	/* Always accept 1080p60 (the validated fallback) */
-	if (mode->hdisplay == T6_SCANOUT_WIDTH &&
-	    mode->vdisplay == T6_SCANOUT_HEIGHT &&
-	    drm_mode_vrefresh(mode) == T6_SCANOUT_REFRESH_HZ)
-		return MODE_OK;
-
-	/*
-	 * Accept any mode we advertised from the hardware table.
-	 * Modes only reach mode_valid if they passed get_modes,
-	 * and we only add modes from the hardware resolution table
-	 * or the 1080p60 fallback — so accept DRM_MODE_TYPE_DRIVER.
-	 */
-	if (mode->type & DRM_MODE_TYPE_DRIVER)
-		return MODE_OK;
-
-	return MODE_BAD;
+	return t6_mode_supported(mode) ? MODE_OK : MODE_BAD;
 }
 
 static enum drm_mode_status
@@ -199,7 +134,7 @@ int t6_connector_init(struct t6_device *t6, struct t6_head *head)
 	/*
 	 * NO polling. Polling caused system freezes -- drm_kms_helper_poll
 	 * workqueue takes mode_config.mutex which deadlocks during probe.
-	 * Modes are force-populated in probe via t6_force_modes() instead.
+	 * Reconnect the device deliberately between experiments.
 	 */
 	head->connector.polled = 0;
 	head->connector.interlace_allowed = 0;
