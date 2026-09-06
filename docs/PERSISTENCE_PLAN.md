@@ -1,7 +1,8 @@
 # Proposed persistence and rollback — not installed
 
 Status: design only, following the user-confirmed HP image and DPMS return on
-2026-09-06. The current module is temporarily loaded. No package, module copy in
+2026-09-06. The module is temporarily resident but now unbound after a later
+whole-dock detach and host hibernation/resume. No package, module copy in
 a system directory, DKMS entry, udev rule, service, autoload, initramfs change,
 or desktop config change has been made. `make install` still refuses.
 

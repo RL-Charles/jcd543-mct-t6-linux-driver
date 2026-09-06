@@ -1,12 +1,15 @@
 # Supervised runtime test — 2026-09-05
 
-Latest status, **2026-09-06 00:52 Mountain**: the user physically confirmed the
+Successful test, **2026-09-06 00:45–00:52 Mountain**: the user physically confirmed the
 HP X27q test screen after the four-byte timing correction and separately confirmed
 the HP visibly went off and returned during external-only DPMS off/on. A settled
 45-second static sample, 90-second fault watcher, and ten-second DPMS-off gating
 test passed with zero USB faults or re-enumeration. The corrected `cec6a342…`
-module remains temporarily loaded on device 102 at `2-1.4.1:1.0`, head 0 only,
-with eDP/VT2 preserved. No permanent installation or config change was made.
+module was left temporarily loaded on device 102 at `2-1.4.1:1.0`, head 0 only,
+with eDP/VT2 preserved. **Latest 08:26 state:** later whole-dock detach/host
+hibernation/resume produced device106; the resident one-attempt module correctly
+refused reinitialization and is unbound/refcount0. See stage40. No permanent
+installation or config change was made.
 Earlier blank-screen/reconnect failures below are historical evidence, not the
 current result. Short supervised success does not establish unattended, suspend,
 hotplug, or general dock support. See the [unexecuted persistence plan](PERSISTENCE_PLAN.md).
@@ -465,6 +468,20 @@ are a different device/path from T6 `2-3.4.1`; no T6 reset was observed.
     `verified-timing-HDMI-A-2.png`. All remain ignored private local artifacts.
     The user authorized saving/committing the evidence. No installation,
     auto-load, package, service, DKMS, or desktop configuration was created.
+40. **Later detach/hibernate/resume, observed read-only at 08:26:** at 01:04:26
+    both dock hub trees, card reader, Ethernet and T6 detached together. T6's
+    outstanding activity latched `-19` and disconnected normally. The journal
+    records hibernation entry at 01:04:32, S4 resume and root-hub power loss at
+    08:17:00, then T6 device106 at the same port at 08:17:01. The module logged
+    exactly one refusal: active probe already attempted. It remains
+    `F6D5C7316849C7428A83002`, refcount0, unbound, no T6 DRM/metrics; Hyprland has
+    only eDP (idle/locked and DPMS off). No agent module/USB/control action ran
+    during this interval. This is a whole-dock/system-power sequence, not a
+    demonstrated recurrence of the old T6-only seven-second loop. Initial dock
+    detach cause is unknown. Hibernation also logged non-T6 platform/USB resume
+    warnings; do not attribute them to this driver without evidence or report
+    this unattended interval as a clean controlled resume test. The working
+    `.ko` and preserved copy still hash `cec6a342…`. Raw journal is kept private.
 
 ### libdrm selector correction
 
@@ -505,8 +522,10 @@ the shim build. The driver still exposes only fixed CEA 1080p60.
 
 ## Next supervised step and recovery
 
-The corrected head-0 image and external DPMS return are now physically confirmed.
-Keep the clean module live at the user's request; review the separate
+The corrected head-0 image and external DPMS return are physically confirmed.
+After the later whole-dock/hibernation sequence, the module is resident but
+unbound and needs a newly reviewed lifecycle/reload step. Preserve the working
+artifact; review the [usability specification](USABILITY_SPEC.md) and
 [persistence proposal](PERSISTENCE_PLAN.md) before any system write. Head 1 has no
 sink and remains inactive. Stop and recover on a new disconnect or fault; the
 single-probe latch prevents automatic reinitialization. No head-1, multi-output,

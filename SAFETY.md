@@ -6,7 +6,9 @@ After earlier blank-screen tests, a four-byte firmware-verified timing correctio
 produced a user-confirmed visible HP X27q test screen on September 6 around
 00:45 Mountain. The user also confirmed physical return after external-only
 DPMS off/on. The 45-second static sample and 90-second fault watcher passed;
-the working module remains temporarily loaded, with no permanent installation.
+the module remains temporarily resident, with no permanent installation. A later
+whole-dock detach/hibernation/resume left it unbound behind the one-attempt latch;
+automatic resume/reconnect recovery is not implemented.
 This narrow supervised success leaves
 kernel crashes, session loss,
 corrupted display output, and USB-controller stalls possible. Upstream history explicitly records
@@ -135,8 +137,9 @@ actual module state and commands, rather than inferring it from a successful bui
 Earlier runtime artifacts allowed the USB core to initialize a newly enumerated
 matching device using resident parameters. The added one-attempt latch closes
 that gap in the current source. Check the artifact hash: rebuilding does not
-replace an already loaded module. The physically working module is currently
-kept live at the user's request; ending the test requires clean module removal.
+replace an already loaded module. The successful artifact was kept live after
+the supervised test; it is now unbound following the later dock detach and host
+hibernation. Ending its resident authorization requires clean module removal.
 
 For a safety bug, prepare a minimal source diff or synthetic reproduction and
 remove private paths, monitor serials, screen pixels, and USB captures before

@@ -19,10 +19,12 @@ three sync fields produced the first physically confirmed image. The
 diff; the [runtime record](docs/RUNTIME_TEST_2026-09-05.md) preserves earlier blank
 screens, reconnects, and the successful test separately.
 
-The working `cec6a342…` module remains temporarily loaded with the explicit
-head-0 Aquamarine name shim and raw idle refresh enabled. Head 1 has no sink and
-has never received frames. All defaults remain inert, including the one-probe
-latch that prevents reconnect/reinitialization loops. `W=1` and offline
+The successful profile uses the explicit head-0 Aquamarine name shim and raw
+idle refresh. **Latest state at 08:26:** a later whole-dock detach and host
+hibernation/resume re-enumerated the T6; `cec6a342…` remains resident but unbound,
+and the one-probe latch correctly refused automatic reinitialization. This is
+not persistent/hotplug-ready output. Head 1 has never received frames. All
+defaults remain inert. `W=1` and offline
 Python/GCC/Clang sanitizer checks pass against exact signed Arch headers staged
 inside this repo. **Nothing is permanently installed, and no desktop config was
 changed.** System headers remain uninstalled. A rollback-safe
@@ -94,6 +96,8 @@ the module after a supervised test to end that authorization.
 - [Contained raw idle-refresh experiment and DPMS safeguards](docs/IDLE_REFRESH_EXPERIMENT.md)
 - [Bounded timing query, request provenance, and offline decoder](docs/TIMING_QUERY.md)
 - [Proposed persistence and rollback plan — not installed](docs/PERSISTENCE_PLAN.md)
+- [Development notes and verified timing fix](docs/DEVELOPMENT.md)
+- [Usability specification and staged roadmap — future work](docs/USABILITY_SPEC.md)
 - [Upstream audit, provenance, limitations, and licensing](docs/UPSTREAM_AUDIT.md)
 - [Development rules](AGENTS.md)
 

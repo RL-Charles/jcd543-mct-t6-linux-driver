@@ -41,6 +41,21 @@ The exact working binary is preserved in ignored runtime artifacts. Nothing was
 permanently installed, no config changed, and no boot/hotplug/suspend support is
 claimed. The [persistence plan](PERSISTENCE_PLAN.md) is a proposal, not execution.
 
+**Later state, 08:26:** at 01:04:26 both dock hub trees, card reader, Ethernet and
+T6 detached together; T6 latched `-19`. Host hibernation entry followed at
+01:04:32, then S4 resume/root-hub power loss at 08:17:00. T6 re-enumerated as
+device106 at 08:17:01. The module-global latch refused one automatic probe and
+left it unbound/refcount0, without a reinitialization loop. Only eDP is present
+in Hyprland (idle/locked, DPMS off). No agent-issued runtime action caused this
+sequence. It is not evidence of the earlier T6-only seven-second failure; it
+demonstrates the intentionally missing reconnect/hibernate recovery. The reason
+for the initial whole-dock detach is not established by these logs.
+
+Current native Ethernet is a separate `0b95:1790` AX88179B entity bound to
+`cdc_ncm`; the coordinating inventory reports NetworkManager Ethernet unavailable
+and no separate dock USB audio entity. Neither Ethernet readiness nor audio
+support is provided or proven by trigger6. They require separate diagnostics.
+
 ## Initial local host/device observation, before module insertion
 
 | Item | Measured state |
@@ -265,10 +280,11 @@ successful physical test and still-live state are summarized at the top.
 
 ## Next supervised step
 
-Keep the clean working module live at the user's request, preserve its exact
-artifact, and review the separate persistence proposal before any installation.
-Do not rerun historical query/reload wrappers against this successful live state.
-Longer reliability tests and kernel-lifecycle/hotplug work remain future steps.
+Preserve the exact working artifact and review the lifecycle/setup specification
+before any installation or new authenticated reload. The later whole-dock detach
+and hibernation left the module resident/unbound; historical device102 wrappers
+must refuse current device106. Longer reliability tests and kernel-lifecycle/
+hotplug work remain future steps.
 Head 1 remains unused. Recovery is in the runtime record and
 [MANUAL_TEST.md](MANUAL_TEST.md).
 

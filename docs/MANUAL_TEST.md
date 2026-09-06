@@ -6,8 +6,9 @@ active head-0 initialization, direct KMS transfer, and Hyprland transport passed
 On September 6, the firmware-verified timing correction also produced a
 user-confirmed visible HP test screen and physical return after external-only
 DPMS off/on. See the [dated runtime record](RUNTIME_TEST_2026-09-05.md) for exact
-hashes, counters, and which steps ran. The working module is still temporarily
-loaded; do not replace it by replaying historical commands below.
+hashes, counters, and which steps ran. The same module is still temporarily
+resident but unbound after a later detach/hibernation/resume; do not replace it
+by replaying historical commands below.
 Review the artifact, dependencies, source changes, and
 [verified build record](LOCAL_BUILD.md) before each new experiment.
 The later active/static-frame instability has a separately reviewed,
