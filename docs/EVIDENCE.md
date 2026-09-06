@@ -3,7 +3,21 @@
 Recorded 2026-09-05–06, US/Mountain. Facts below distinguish local observation,
 inherited information, source-level reasoning, and physical results.
 
-## Latest result: physical display and DPMS return confirmed
+## Current state — installed rel4 live, startup explicitly enabled
+
+At **15:59:51 September 6**, after the user's explicit opt-in, the installed
+watcher adopted the working device125 without reloading the module. Package
+`0.1.0-4` and its exact approved DKMS artifact passed installed active stop,
+15-second quiet, one warm start and 45-second streaming gates. The user confirmed
+the installed image before that cycle. No USB reset, transport fault or new core
+occurred during the cycle. Actual reboot, suspend/resume, deliberate replug,
+uninstall/rollback and a one-hour soak remain unverified. Earlier status0/firmware
+teardown failures and the GTK/Wayland Ghostty SIGSEGV remain recorded, not erased
+by this narrow success. The latest dated sections below and
+[installation chronology](INSTALL_TEST_2026-09-06.md) separate physical proof,
+software results, failures and remaining limitations.
+
+## Original manual result: physical display and DPMS return confirmed
 
 On September 6 around **00:45 Mountain**, the user confirmed that the HP X27q
 physically displayed the test screen through the standalone MCT HDMI port.
@@ -292,3 +306,375 @@ For every later stage append: date, source commit and diff, kernel/module hash,
 USB topology, selected logical/physical output, monitor/cable, exact command,
 kernel log result, visible result, and recovery result. A successful build,
 bind, test pattern, and Hyprland desktop are four separate milestones.
+
+## 2026-09-06 09:20 Mountain — offline package/controller gates
+
+Implemented a separate root-owned-helper Arch/DKMS package and bounded controller;
+no kernel source change, system installation, module reload, service activation,
+or desktop configuration change was performed. The original successful binary
+and its preserved copy still both hash to
+`cec6a3429df95e8b3d79ab01e02ff0b7ff96ccee5aa39a11ad30938c09374c35`.
+
+- `make check`: 35 source-policy, 40 controller, and 10 setup/manifest Python
+  tests pass. Independently rebuilt GCC and Clang ASan/UBSan harnesses each pass
+  64 descriptor cases, 128 refresh cases, and 39,475,200 IN tuples plus nine bounds.
+- The controller tests include the actual 23-character srcversion format,
+  exact artifact metadata/hash and unapproved kernel/compositor refusal,
+  descriptor/udev generation, partial enumeration, stale work, budgets, rapid
+  re-enumeration, S4 recovery policy, active fault cleanup, and incomplete sleep
+  inhibition. These are synthetic policy/adapter tests, not hardware lifecycle proof.
+- `systemd-analyze verify` and Bash syntax checks pass. `git diff --check` passes.
+  Sparse/shellcheck remain unavailable. No C delta was introduced, so there is
+  no new kernel checkpatch delta beyond the previously checked timing fix.
+- Ordinary-user `makepkg --nodeps --noconfirm --log` produced the source-only
+  `jcd543-trigger6-dkms-0.1.0-1-x86_64.pkg.tar.zst`, SHA-256
+  `3c0bf049c6a674f7bbeef853020e853a7aefae22f9958488ae8348d487d35dc3`.
+  Its 22 manifest-owned payload files verify after extraction; archive metadata
+  records root ownership and intended modes. No `.INSTALL`, enabling hook, udev
+  rule, raw runtime artifact, or user configuration is included. Standard local
+  makepkg `.BUILDINFO` stays in this ignored archive, not a published release.
+- All packaged kernel source bytes match the physically proven checkout.
+  A full packaged-source W=1 build against the verified staged headers succeeds,
+  with only the already-known missing-pahole version notice (optional BTF off).
+  That distinct local build hashes to
+  `e873786ea8332ae959a54c17f83355f34fc3a8227072f53ae73a639496931b5d`,
+  srcversion `F6D5C7316849C7428A83002`, matching running-kernel vermagic and exact
+  alias, empty dependencies. It was not loaded; a future DKMS artifact still
+  requires inspection of its own installed hash and explicit approval.
+- Read-only adapter check at this stage finds the exact T6 device106, path
+  `2-1.4.1`, unbound, and the approved-source old module resident/refcount0.
+  Hyprland is present; the idle laptop panel is off, so the new start guard would
+  wait. No new physical display result is claimed.
+
+See [INSTALLATION.md](INSTALLATION.md) for staged host installation and rollback.
+Service enablement remains behind supervised installation, visible output,
+DPMS/replug and sleep/recovery acceptance. New-kernel approval maintenance is an
+explicit separate review; the initial approval command refuses overwrite.
+
+### 09:23 follow-up — canonical module path compatibility
+
+Read-only host inspection established that kmod reports `/lib/modules/...` while
+this Arch host's `/lib` resolves to `/usr/lib`. Setup now normalizes only that
+exact alias/current-kernel layout, then checks protected ownership/no symlinks
+before reporting the artifact. It refuses traversal, another kernel/module,
+unreviewed alias layouts and symlink escapes. Fixtures cover `.ko`, `.ko.zst`,
+`.ko.xz` and `.ko.gz`; the full suite now passes 35+40+13 Python tests (88 total).
+This corrects a safe refusal before installation, not a kernel/USB behavior.
+
+The replacement final archive has SHA-256
+`e7cce86932d0d9be0349e5e0fe953b8c07c7191a8cd455633edb540e0f2a6ef9`.
+Its extracted 22-file manifest and controller/setup/kernel byte equality pass;
+the kernel payload is unchanged from the full W=1 packaged-source build above.
+The earlier `3c0bf049...` archive is retained privately but superseded. All
+archives/build logs remain ignored and uninstalled. Before any actual installed
+start, a harmless transient status/capability check must verify the unchanged
+systemd sandbox retains CAP_SYS_MODULE with NoNewPrivs enabled; no speculative
+sandbox relaxation has been made.
+
+### 09:30 — stop-timeout containment and first prerequisite prompt
+
+Final failure-path review restricted the controller's one cleanup attempt to a
+failed **start**. A failed **stop** now immediately preserves its inflight/circuit
+markers; it never submits another unbind while the timed-out kernel operation
+may still be running. The new regression passes, including a later observer tick
+that performs no mutation. Full Python tests now pass 35+41+13 (89 total).
+
+The superseding source/helper archive SHA-256 is
+`05b7b8054e8c02b220fb514b095c56e02496bc6af44d3c72654aaf127d3992d6`.
+Its 22 manifest-owned extracted files verify, and helper/kernel source equality
+passes. The earlier archives remain ignored, uninstalled development artifacts.
+
+After review, one 300-second bounded graphical authentication prompt requested
+only `/usr/bin/omarchy pkg add linux-headers dkms`. The Omarchy polkit overlay
+was present on eDP, but the laptop stayed idle/locked. At 09:30:22 the command
+expired with exit124 and an empty transaction log. No pkexec/pacman process
+remained; linux-headers, DKMS and pahole were still absent. No package archive
+installation, driver operation, service enablement or other system change ran.
+Authentication readiness is the concrete next prerequisite, not a build failure.
+
+## 2026-09-06 12:20 Mountain — prerequisites installed, driver still uninstalled
+
+The user returned and explicitly requested one retry. Fresh read-only checks
+confirmed eDP active/unlocked, no stale pkexec/pacman or package DB lock, installed
+kernel `7.1.9.arch1-2`, and exact matching sync headers. One bounded graphical
+`pkexec /usr/bin/omarchy pkg add linux-headers dkms` authenticated successfully
+and completed with exit0. Pacman performed signature/integrity/conflict checks
+and installed exactly:
+
+- `linux-headers 7.1.9.arch1-2` — 21,599 package files, zero altered.
+- `dkms 3.4.3-2` — 28 package files, zero altered.
+- Required dependency `pahole 1:1.31-2` — 50 package files, zero altered.
+
+The package-file results are from `pacman -Qkk`. Prepared headers include the
+root-owned Makefile, Module.symvers and generated autoconf; kernel.release is
+exactly `7.1.9-arch1-2`. Standard package hooks armed ConditionNeedsUpdate,
+updated module dependencies, and scanned DKMS modules. `dkms status` is empty.
+No custom driver package, approval file, service, module load/reload, autostart
+or desktop configuration change was performed. The old physically proven module
+remains resident/refcount0, with the T6 unbound. The reviewed archive still hashes
+to `05b7b8054e8c02b220fb514b095c56e02496bc6af44d3c72654aaf127d3992d6`.
+Its installation/capability/approval/live-test stages remain separately gated.
+The generated transaction log is retained under ignored artifacts.
+
+## 2026-09-06 afternoon — installed image, lifecycle refusal and cold recovery
+
+The complete sanitized chronology is in
+[INSTALL_TEST_2026-09-06.md](INSTALL_TEST_2026-09-06.md). The reviewed package was
+installed, its 22-file manifest/41 package files verified, and the current-kernel
+DKMS module explicitly approved at SHA-256
+`404a3d3755feaabbef9d12ab018b4055ac495e774320dfc3c082945c95890a8e`.
+The unchanged service sandbox passed a read-only CAP_SYS_MODULE/NoNewPrivs check.
+The host's stock DKMS package hook rebuilt the UKI and updated Limine; a reviewed
+read-only audit found the blacklist but no trigger6 payload in its initramfs.
+Boot/fallback/signature limits are recorded rather than claiming a tested reboot.
+
+The first packaged start failed before DRM and tripped its circuit. After a true
+dock cold reset, device113 produced a user-confirmed physical image at 12:53.
+Its 45-second sample and ten software-only DPMS cycles passed with zero faults,
+zero off-state transfer and real-frame return on every on. The watcher adopted
+the same generation without another insertion. A later sleep pre-hook failed
+within about 26ms after unbind, preserved inhibition/inflight state, and never ran
+post. The T6 re-enumerated once; a guarded restore saw status0 and refused before
+OUT. The first acceptance runner swallowed captured stderr; the exact immediate
+refusal cannot be reconstructed and is not labeled a timeout.
+
+Another user-performed true cold reset and one guarded start restored device119
+at 13:11:38. The user explicitly confirmed the HP test window again. The working
+module remains live, **watcher inactive/startup disabled**. The later user report
+of an off screen crossed with sleep cleanup, not a proven DPMS physical failure.
+
+A controller-only follow-up adds bounded 500ms refcount settling within the
+shared 2.5s stop deadline, exact persisted phase/errors, stale-state revalidation
+and honest unknown-ledger reporting. It changes no kernel/control bytes and is
+not installed at that checkpoint. Full offline validation passes 111 Python tests (35+63+13), both
+GCC/Clang sanitizer matrices, unit/shell syntax and whitespace checks. Kernel
+shutdown ordering remains a separately documented hypothesis. Startup, sleep,
+replug, one-hour mixed soak, reboot and actual uninstall gates remain incomplete.
+
+### 13:35 — controller correction committed and archive audited, not installed
+
+Private development commit `95c01830146fb1d6a2c7aae775333111b99d981b`
+contains the focused controller correction, 63 controller tests, updated evidence
+and explicit package release `0.1.0-2`. Its source/helper archive SHA-256 is
+`bad8b9a4c9284e17ea840dc962f85473b93bca795430894beb7fda76df66bc86`.
+An ordinary-user extraction verified all 22 manifest files, exact controller/
+checkout equality, and every packaged kernel file equal to both the checkout
+and installed proven source. Archive ownership/modes are root-owned/non-writable;
+there is no symlink or extra activation hook. Standard local `.BUILDINFO` remains
+private in the ignored archive; it is not a published release artifact.
+
+This archive has not been installed. The running module remains the approved
+`404a3d37...` artifact on device119, service inactive/disabled. A later read-only
+sample showed frames8054, refresh1153 and all fault counters zero. Installation
+requires another reviewed action, inspection of any stock DKMS/UKI hook effects,
+and an independent installed-artifact hash check. Changed artifact approval must
+be preserved/reviewed explicitly, never overwritten silently.
+
+### 13:40 — reviewed 0.1.0-2 upgrade installed without live interruption
+
+The exact `bad8b9a4...` archive was approved and installed with one bounded
+authenticated pacman transaction. The old compressed module/controller/approval/
+manifest were preserved first. Package Qkk again reports 41 files, zero altered;
+all 22 installed manifest files verify and the controller equals the reviewed
+source. DKMS rebuilt the current-kernel module but its exact SHA remained
+`404a3d3755feaabbef9d12ab018b4055ac495e774320dfc3c082945c95890a8e`;
+approval was independently verified byte-identical and was not rewritten.
+
+The stock UKI/Limine hook ran; pre/post UKI and config hashes were identical.
+The parseable image still has 940 main entries, no trigger6 payload, and the
+exact installed blacklist. Temporary extraction was cleaned. The resident
+module's sysfs inode and device119 generation/binding were unchanged, with
+advancing frames/refresh and zero faults. eDP/HP remain logically active, and
+service remains inactive/disabled. Revised authenticated and unprivileged status
+now accurately distinguish canonical versus inaccessible private ledger state.
+At that checkpoint no sleep/DPMS/watcher action had followed the upgrade; live
+cleanup still required review. See [the full audit](INSTALL_TEST_2026-09-06.md).
+
+### 13:50–14:17 — clean STOP, persistent teardown issue, HP-only physical PASS
+
+The separately authorized isolated pre-hook exited zero in 119.897ms, with
+14.371ms to the exact-unbind event and 25.271ms reference settling. The module
+was removed normally; no stuck task, circuit or inflight work remained. Sleep
+inhibition was retained, eDP stayed active and no post/reload ran. Firmware
+nevertheless disconnected 4.362s after its disconnect callback and re-enumerated
+as device120. A further whole-dock cold reset produced device125. One later
+post-hook rearmed state only; the explicit start then received status0 and
+refused before initialization OUT/DRM/frames, with clean removal and latched
+circuit. The earlier immediate-refcount defect and firmware teardown are thus
+separate findings.
+
+After an explicitly reported **HP-only AC power cycle of about 20 seconds**, with
+HDMI and dock USB/power left connected, the same device125 returned status1 and
+valid HP EDID at **14:15:11**. One approved clear/start restored active 1080p60.
+The user subsequently confirmed a stable, visible test window: **physical PASS**.
+The compressed installed artifact remains
+`404a3d3755feaabbef9d12ab018b4055ac495e774320dfc3c082945c95890a8e`, with controller
+`88d442054be2ad3e003b0a7fe78bd7e1676aefbc4f449f220a79edbcc97767e2` and unchanged
+approval. Canonical state records one managed attempt and no circuit/inflight;
+service remains inactive/disabled. The 14:16:49–54 raw sample sent four frames/
+refreshes and 33,177,920 bulk bytes; every fault and head1 traffic counter stayed
+zero, with no disconnect or warning through 14:17:13.
+
+Two wrapper issues are preserved separately: a mixed-clock cooldown assertion
+refused before any mutation, and late authentication outlasted the user-owned
+outer timeout while the privileged single start completed normally. Its final
+log and independent state checks prove completion; outer exit137 alone did not.
+No second kernel attempt was launched. Future runners need matching ledger
+clocks and a privileged execution deadline separate from authentication.
+
+A separately symbolized main Ghostty singleton SIGSEGV occurred at
+14:15:11.921, within about 20ms of DRM ready. Independent core analysis traced
+GTK4 4.22.4 `dmabuf_formats_free` called by `linux_dmabuf_done` in Wayland feedback
+handling; no OOM or kernel/driver fault was found. The dedicated non-singleton
+test terminal survived. This external GTK/Wayland hotplug bug remains a client
+safety gate: preserve user work and minimize singleton exposure before separately
+reviewed output cycling. The physically working display is preserved; only
+offline design continues. No Ghostty/system configuration changed. Raw logs,
+ledger backups and metrics remain ignored/private; this update changes docs only.
+
+### Later offline work — default-off final monitor-off branch
+
+After evidence commit `31b2df0006d3a20f914b7d0751caa14328629cb3`, an explicitly
+reviewed offline implementation adds `final_monitor_off=0`. It preserves unplug
+and complete work drain before one private disconnect-owned EP0 `40/03` head0
+off, guarded by exact profile/path, cached sink/EDID, prior active scanout,
+configured/unbinding USB and no existing fault. Deadline250ms; no reset, retry,
+head1 traffic or global/head fault-latch mutation. Existing atomic-disable
+protection, timing record and all initialization/audio calls remain unchanged.
+
+The isolated W=1 build passes on matching system headers, including both USB
+state gates, with no warnings. Module SHA-256
+`d54cf17bd604629be0dd39d1c21c18eefaa135366ae0010467f3d30d3d7a480b`, srcversion
+`CC62C8A09077D5A5D804316`, matching vermagic/exact alias/no dependencies. New flag
+is readonly and zero-initialized. Strict checkpatch passes; 114 Python checks
+and fresh GCC/Clang sanitizer matrices pass, including 40,960 final-off policy
+combinations and 8,193 result cases. See the
+[design and detailed gates](QUIESCE_EXPERIMENT.md).
+
+This branch has **not been installed or hardware-tested**. Only the prospective
+source package release/header list changes (`0.1.0-3`); no new package transaction
+or approval happened. Current proven manual/installed artifact hashes remain
+`cec6a342...`/`404a3d37...`. The physically confirmed live module, installed
+controller, service inactivity/startup-disabled state and desktop config are
+untouched. Preserve the Ghostty client-hotplug safety gate before any further
+separately reviewed transition.
+
+The focused implementation was committed as `5679130425430f41b8dc9e71f0bb6d24a709c3b5`.
+Normal-user package build `0.1.0-3` and its 45-entry/23-payload SHA/mode/scope audit
+passed; archive SHA-256 is
+`b4c992a4bd558be1e92eda437d0d0d39faeaf5a7f6671881c203b502451020a6`.
+The inherited manifest compatibility-version field remains `0.1.0-1`, while
+pacman metadata correctly records `0.1.0-3`; resolving that metadata discrepancy
+is a separate packaging gate. The archive is not approved for installation.
+At 14:53–54, read-only checks found device125 still bound/active with zero faults,
+both displays on, installed artifacts/approval unchanged and service inactive/
+disabled. The next separately reviewed test is the old-module DPMS-off/stop
+bridge only, not a new-artifact load. Detailed archive and phase gates are in
+[QUIESCE_EXPERIMENT.md](QUIESCE_EXPERIMENT.md).
+
+### Supervised quiesce Phase A/B — September 6, 15:02–15:09
+
+Phase A used the **old installed module**: scoped external DPMS-off, a two-second
+zero-traffic sample, then exactly one ordinary installed stop at15:02:04.405.
+Stop returned0 in116.885ms (reference settle25.252ms); eDP stayed on. Unlike the
+earlier active teardown, device125 stayed enumerated and unbound through the
+15-second quiet observation. No new kernel fault/core or process leftover was
+found. A preceding Lua syntax refusal changed nothing and was preserved before
+the separately authorized corrected attempt. One incidental controller bytecode
+cache created by a diagnostic import was disclosed and retained for final
+reviewed cleanup; subsequent privileged runners use Python `-B`.
+
+Phase B separately loaded the isolated `d54cf17b...` artifact once from a fresh,
+sealed root-owned0600 `/run` copy with `final_monitor_off=1`. At15:08:45–46, the
+same device125 returned status1/valid HP EDID and active HDMI-A-2 at1080p60. The
+existing test window/workspace returned automatically. A45-second sample advanced
+87 frames, 42 idle refreshes and638,984,336 bulk bytes with zero errors, head1
+traffic, USB reconnects, kernel warnings or new cores. Root/coordinator exited0.
+The module stays live pending explicit physical confirmation; its new final-off
+helper has not run yet. Installed package/artifact/approval and controller ledger
+remain unchanged, service inactive/disabled. The installed controller correctly
+does not own this differently hashed temporary module. Detailed gates/log names
+are in [QUIESCE_EXPERIMENT.md](QUIESCE_EXPERIMENT.md).
+
+The user then explicitly confirmed the Phase B test window was physically visible
+on the HP: **physical PASS**. A separately approved Phase C performed an active
+stop at15:15:05, without prior DPMS-off. The new helper issued exactly one
+`40/03 value=0 index=0 length=0 timeout_ms=250`, returning **ret0/error0 in1576us**
+with no skip. Unbind4.327ms, reference settle0.202ms and ordinary rmmod completed
+in31.867ms total. Device125 stayed enumerated/unbound for15 seconds with eDP on,
+no reconnect, kernel warning, new core or privileged process leftover. No
+recovery/load followed. Installed package/approval/ledger stayed unchanged and
+service inactive/disabled; sealed recovery artifact remains protected in `/run`.
+This is a successful isolated active quiesce trial, not full lifecycle acceptance.
+
+### Offline rel4 integration and archive audit — September 6
+
+After physical/active-stop evidence commit `ed4419d19ddcef2230cbd954ce9b1eaf19b12ff4`,
+integration commit `61cf78d` requires `final_monitor_off=Y` in the controller's
+exact insertion/ownership profile. Missing/off/malformed values remain unowned.
+PKGBUILD release `0.1.0-4` is passed explicitly into the payload manifest;
+verification checks the installed release via bounded read-only `pacman -Q`.
+No runtime release override exists. Old rel3 archive, installed rel2, installed
+approval and sealed recovery artifact are preserved; no transaction occurred.
+
+All **122 Python tests** pass (38 source, 66 controller, 18 setup), including eight
+new ownership/argument/release/mismatch/failure regressions. Fresh GCC/Clang
+ASan/UBSan each pass all four C matrices. Fresh W=1 build and strict kernel
+checkpatch pass without warnings; shell/unit syntax and diff checks pass.
+Kernel source is byte-identical to the physically tested isolated build.
+Fresh module SHA-256 `b4fb3c15ed8df2cc271ba7750ffbc05297d9de58110f5c110031d50ea6b663a6`,
+srcversion `CC62C8A09077D5A5D804316`, exact vermagic/USB alias/no dependencies.
+All 48 loaded code/data/relocation sections match the tested `d54cf17b...` artifact;
+the GNU build-ID note differs. Debug/BTF sections are outside this comparison.
+The fresh binary itself was not loaded. Sparse/ShellCheck remain unavailable.
+
+Normal-user makepkg completed in ignored `artifacts/rel4-package-nYx2Xh/`.
+Archive `jcd543-trigger6-dkms-0.1.0-4-x86_64.pkg.tar.zst` SHA-256:
+`a55d62f6501a93dfa96dd078929edfad3bf587eb2aad464e3ce92f1ece7ba90d`.
+All 46 archive entries have safe root ownership/modes and no links, special
+files or path escapes; all 24 payload files match their SHA/mode manifest.
+Manifest release equals `.PKGINFO` release0.1.0-4. Extracted synthetic-root setup
+verification passes with that archive package record. No `.INSTALL`, enable
+link, udev rule or module-autoload entry exists; blacklist/service/sleep hook
+are unchanged. The quiesce experiment document is included in the package.
+
+Payload controller SHA-256:
+`47ee89b3e7b749ec228be3fa50cf5ef41dc75d6fbd42081f8935eb92624bf454`;
+setup `de9ca247e103b4f8d52472bc83b3966dcb5fd4d6ee8ffe053ed4d63e2edcd34e`;
+manifest `b17f30fb973c1f6fd74ed05db2d811e68e5441af22ee547119e7d0a36a58aa84`.
+Private archive build metadata and raw audit/runtime artifacts remain ignored.
+
+At the last read-only check, device125 remained unbound/module absent after
+Phase C, eDP on, service inactive/disabled and installed hashes unchanged.
+Another received display confirmation cannot establish a new live module while
+this state persists; the explicit earlier Phase B physical PASS is retained.
+Next gate is review of one exact package transaction and its standard DKMS/UKI
+effects, then independent new-artifact/approval review. No load, approval change
+or service enable is part of this offline completion.
+
+### 15:41–15:59 — installed rel4 lifecycle and explicit startup opt-in
+
+The audited rel4 archive was subsequently installed and the resulting DKMS
+artifact independently approved, preserving the old approval and rollback
+artifact. Package Qkk reports43 files/0 altered; setup verifies24 payload files.
+Installed compressed module SHA-256:
+`6eaaacab55b70c1a27b92fdf9cf32c4b1058c7743c33c12ec22cfdf3c5e91f60`,
+srcversion `CC62C8A09077D5A5D804316`. The exact current profile requires head0,
+shim, raw refresh, serialized USB and final-off; query/secondary switches stay off.
+
+One separately authorized installed active-stop/warm-start test at15:41 kept
+device125 unchanged. Final-off was exactly `40/03 v0 i0 len0 timeout250ms`,
+ret0/error0 in1866us; ordinary installed stop completed in100.758ms. After15s
+quiet, one start completed in550.922ms with status1/valid HP EDID. The45s sample
+added83 frames,41 idle refreshes and614,024,400 bulk bytes, with zero faults,
+head1 traffic, reconnects, new cores or privileged leftovers. No retry, circuit
+clear, DPMS manipulation or service activation occurred in this cycle.
+
+At15:59:51 the user separately authorized automatic startup. The service became
+active/enabled and adopted the existing managed generation without reinitializing;
+frames1622→1638 advanced. Effective/bounding capabilities contained only
+CAP_SYS_MODULE, NoNewPrivs=1, seccomp mode2 with14 filters, ProtectSystem=strict,
+ProtectHome=yes and PrivateTmp=yes. The exact
+[installation chronology](INSTALL_TEST_2026-09-06.md) records approval, commands,
+private evidence hashes and acceptance limitations. No source, desktop settings
+or other dock-interface configuration changed during these actions.

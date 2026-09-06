@@ -1,0 +1,16 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Root-owned system-sleep hook, strictly bounded and independent of user sessions.
+set -eu
+export PATH=/usr/bin
+[[ $# == 2 ]] || exit 2
+[[ -s /etc/jcd543-trigger6/approved.json ]] || exit 0
+[[ -s /run/jcd543-trigger6/state.json ]] || exit 0
+case "$1" in
+    pre) sleep_action=pause ;;
+    post) sleep_action=resume ;;
+    *) exit 2 ;;
+esac
+# Failure retains sleep-inhibit; post never clears an incomplete pre operation.
+/usr/bin/timeout --signal=TERM --kill-after=1s 3s \
+    /usr/bin/python3 -I -B /usr/lib/jcd543-trigger6/controller.py "$sleep_action" --apply

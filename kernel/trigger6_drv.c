@@ -52,6 +52,7 @@
 
 #include "trigger6.h"
 #include "trigger6_codec.h"
+#include "trigger6_quiesce.h"
 
 #define DRIVER_NAME	"trigger6"
 #define DRIVER_DESC	"JCD543 MCT Trigger 6 experimental USB display"
@@ -106,6 +107,12 @@ module_param_named(raw_idle_refresh, t6_raw_idle_refresh, bool, 0444);
 MODULE_PARM_DESC(raw_idle_refresh,
 		 "Default false; head-0-only experiment replaying the last sent frame after 1s idle, only while CRTC active");
 #define T6_RAW_IDLE_REFRESH_MS	1000
+
+/* One private final EP0 off after unplug/drain; never a new live control ABI. */
+static bool t6_final_monitor_off;
+module_param_named(final_monitor_off, t6_final_monitor_off, bool, 0444);
+MODULE_PARM_DESC(final_monitor_off,
+		 "Default false; head-0-only final monitor-off during configured unbind after DRM/work drain; no retry or fault clearing");
 
 /*
  * Global mutex serialising USB bulk I/O across all T6 devices.
@@ -2947,6 +2954,8 @@ static int t6_usb_probe(struct usb_interface *intf,
 	}
 	if (t6_query_timing_page1 && !t6_query_timings)
 		return -EINVAL;
+	if (t6_final_monitor_off && (t6_query_only || t6_output_mask != 1))
+		return -EINVAL;
 	if (t6_query_timings && (!t6_query_only || t6_output_mask != 1 ||
 				 t6_aquamarine_evdi_name || t6_raw_idle_refresh)) {
 		dev_err(&intf->dev,
@@ -3186,9 +3195,78 @@ err_put:
 	return ret;
 }
 
+static const char *t6_final_off_policy(struct t6_device *t6,
+				       struct usb_interface *intf, bool was_active)
+{
+	struct t6_head *head = t6_get_head(t6, 0);
+	struct t6_final_off_state state = {
+		.enabled = t6_final_monitor_off,
+		.manual_only = t6->manual_only,
+		.query_only = t6_query_only,
+		.output_mask = t6->output_mask,
+		.profile_matches = t6_match_interface(intf),
+		.path_matches = t6_device_path[0] &&
+			!strcmp(t6_device_path, dev_name(&t6->udev->dev)),
+		.primary_raw = head->transport == T6_HEAD_TRANSPORT_RAW,
+		.was_active = was_active,
+		.sink_valid = READ_ONCE(head->connected) &&
+			READ_ONCE(head->status) == 1,
+		.edid_valid = head->edid_len == 128 &&
+			t6_edid_base_block_valid(head->edid_data),
+		.faulted = READ_ONCE(t6->io_faulted) || READ_ONCE(head->io_faulted),
+		.usb_configured = READ_ONCE(t6->udev->state) == USB_STATE_CONFIGURED,
+		.unbinding = READ_ONCE(intf->condition) == USB_INTERFACE_UNBINDING,
+		.drained = drm_dev_is_unplugged(&t6->drm) && !READ_ONCE(t6->wq),
+	};
+
+	return t6_final_off_skip(&state);
+}
+
+/*
+ * Disconnect owns the USB reference until its final usb_put_dev. Unlike DRM
+ * entry points, this private cleanup runs only after unplug drained all users
+ * and the workqueue was destroyed. USB core disables this interface's three
+ * nonzero endpoints on unbind; the configured device's EP0 remains available.
+ * Keep all ordinary drm_dev_enter guards unchanged. No global fault mutation:
+ * log the exact cleanup result, then finish teardown even if the request fails.
+ */
+static void t6_final_off_disconnect(struct t6_device *t6,
+				    struct usb_interface *intf, bool was_active)
+{
+	const char *skip;
+	u64 started, elapsed;
+	int ret;
+
+	if (!t6_final_monitor_off)
+		return;
+	skip = t6_final_off_policy(t6, intf, was_active);
+	if (skip) {
+		dev_info(&intf->dev, "Final monitor-off skipped: %s\n", skip);
+		return;
+	}
+	mutex_lock(&t6->io_lock);
+	skip = t6_final_off_policy(t6, intf, was_active);
+	if (skip) {
+		dev_info(&intf->dev, "Final monitor-off skipped under lock: %s\n", skip);
+		goto unlock;
+	}
+	dev_info(&intf->dev, "Final monitor-off attempt: 40/03 value=0 index=0 length=0 timeout_ms=250\n");
+	started = ktime_get_ns();
+	ret = usb_control_msg(t6->udev, usb_sndctrlpipe(t6->udev, 0),
+			      T6_FINAL_OFF_REQUEST, T6_FINAL_OFF_TYPE,
+			      T6_FINAL_OFF_VALUE, T6_FINAL_OFF_INDEX, NULL,
+			      T6_FINAL_OFF_LENGTH, T6_FINAL_OFF_TIMEOUT_MS);
+	elapsed = ktime_get_ns() - started;
+	dev_info(&intf->dev, "Final monitor-off result: ret=%d error=%d duration_us=%llu\n",
+		 ret, t6_final_off_error(ret), div_u64(elapsed, 1000));
+unlock:
+	mutex_unlock(&t6->io_lock);
+}
+
 static void t6_usb_disconnect(struct usb_interface *intf)
 {
 	struct t6_device *t6 = usb_get_intfdata(intf);
+	bool was_active;
 
 	usb_set_intfdata(intf, NULL);
 	/* sysfs group removed automatically by devm */
@@ -3196,14 +3274,16 @@ static void t6_usb_disconnect(struct usb_interface *intf)
 	if (!t6)
 		return;
 
+	was_active = READ_ONCE(t6_get_head(t6, 0)->scanout_active);
 	dev_info(&intf->dev, "T6 disconnecting\n");
 
 	/*
 	 * Disconnect ordering:
 	 * 1. Unplug -- waits for in-progress drm_dev_enter, blocks new ones
 	 * 2. Cancel async frame work before releasing buffers
-	 * 3. Shutdown -- disables outputs (pipe_update guarded by drm_dev_enter)
-	 * 4. Tear down userspace-visible state and buffers
+	 * 3. Optional private final off while this callback still owns USB
+	 * 4. Atomic shutdown (its ordinary unplug guards stay unchanged)
+	 * 5. Tear down userspace-visible state and buffers
 	 * No poll_fini needed -- polling is disabled.
 	 */
 	drm_dev_unplug(&t6->drm);
@@ -3215,6 +3295,7 @@ static void t6_usb_disconnect(struct usb_interface *intf)
 		destroy_workqueue(t6->wq);
 		t6->wq = NULL;
 	}
+	t6_final_off_disconnect(t6, intf, was_active);
 	drm_atomic_helper_shutdown(&t6->drm);
 	t6_unregister_jpeg_devices(t6);
 	t6_free_head_buffers(t6);

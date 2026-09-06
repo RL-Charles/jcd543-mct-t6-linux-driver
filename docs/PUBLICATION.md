@@ -33,6 +33,7 @@ binary; a public checkout must build and validate its own matching artifact.
 
 The public report distinguishes firmware/capture agreement, compiler/policy
 checks, successful transport, and user-confirmed physical output. It makes no
-claim that the package is permanently installed or that future roadmap items
-are implemented. A release must repeat the tree and commit-metadata audit before
+claim of general hardware or complete lifecycle support. The later local opt-in
+package installation/startup is explicitly dated and distinguished from remaining
+roadmap items. A release must repeat the tree and commit-metadata audit before
 publishing new files, binaries, logs, or additional refs.

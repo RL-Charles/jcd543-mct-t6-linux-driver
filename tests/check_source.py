@@ -209,6 +209,54 @@ class SourceBoundaryTests(unittest.TestCase):
         self.assertIn("pixels != head->last_sent_frame", raw)
         self.assertIn("raw_last_sent_jiffies", raw)
 
+    def test_final_off_is_default_off_head0_and_shared_with_host_matrix(self):
+        source = (ROOT / "kernel/trigger6_drv.c").read_text()
+        self.assertIn("static bool t6_final_monitor_off;", source)
+        self.assertIn("t6_final_monitor_off, bool, 0444", source)
+        probe = source.split("static int t6_usb_probe(", 1)[1].split("static const char *t6_final_off_policy", 1)[0]
+        gate = "t6_final_monitor_off && (t6_query_only || t6_output_mask != 1)"
+        self.assertLess(probe.index("if (t6_manual_only)"), probe.index(gate))
+        self.assertLess(probe.index(gate), probe.index("atomic_cmpxchg"))
+        policy = source.split("static const char *t6_final_off_policy", 1)[1].split("static void t6_final_off_disconnect", 1)[0]
+        for required in ("t6_final_off_skip", "t6_match_interface(intf)", "strcmp(t6_device_path",
+                         "head->status) == 1", "t6_edid_base_block_valid", "head->edid_len == 128",
+                         "head->io_faulted", "t6->io_faulted", "USB_STATE_CONFIGURED",
+                         "USB_INTERFACE_UNBINDING", "drm_dev_is_unplugged", "!READ_ONCE(t6->wq)"):
+            self.assertIn(required, policy)
+        self.assertIn("trigger6_quiesce.h", (ROOT / "packaging/PKGBUILD").read_text())
+
+    def test_final_off_is_one_private_locked_request_without_fault_mutation(self):
+        source = (ROOT / "kernel/trigger6_drv.c").read_text()
+        helper = source.split("static void t6_final_off_disconnect", 1)[1].split("static void t6_usb_disconnect", 1)[0]
+        self.assertLess(helper.index("if (!t6_final_monitor_off)"), helper.index("mutex_lock"))
+        self.assertEqual(helper.count("t6_final_off_policy(t6, intf, was_active)"), 2)
+        locked = helper.split("mutex_lock(&t6->io_lock);", 1)[1]
+        self.assertLess(locked.index("t6_final_off_policy"), locked.index("usb_control_msg"))
+        self.assertEqual(helper.count("usb_control_msg("), 1)
+        for required in ("usb_sndctrlpipe(t6->udev, 0)", "T6_FINAL_OFF_REQUEST, T6_FINAL_OFF_TYPE",
+                         "T6_FINAL_OFF_VALUE, T6_FINAL_OFF_INDEX, NULL", "T6_FINAL_OFF_LENGTH",
+                         "T6_FINAL_OFF_TIMEOUT_MS", "ret=%d error=%d duration_us=%llu",
+                         "t6_final_off_error(ret)"):
+            self.assertIn(required, helper)
+        for forbidden in ("drm_dev_enter(", "t6_ctrl_out(", "t6_latch_io_error(", "WRITE_ONCE(",
+                          "t6_bulk_", "usb_reset", "for (", "while (", "queue_work", "mod_timer"):
+            self.assertNotIn(forbidden, helper)
+
+    def test_final_off_preserves_unplug_and_complete_drain_before_usb_release(self):
+        source = (ROOT / "kernel/trigger6_drv.c").read_text()
+        disconnect = source.split("static void t6_usb_disconnect", 1)[1].split("static int t6_usb_suspend", 1)[0]
+        ordered = ("was_active = READ_ONCE", "drm_dev_unplug(&t6->drm)",
+                   "t6_cancel_head_activity(t6)", "destroy_workqueue(t6->wq)",
+                   "t6->wq = NULL", "t6_final_off_disconnect(t6, intf, was_active)",
+                   "drm_atomic_helper_shutdown(&t6->drm)", "t6_free_head_buffers(t6)",
+                   "usb_put_dev(t6->udev)")
+        positions = [disconnect.index(token) for token in ordered]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(source.count("t6_final_off_disconnect(t6, intf, was_active)"), 1)
+        disable = source.split("static void t6_crtc_atomic_disable", 1)[1].split("static int t6_crtc_atomic_check", 1)[0]
+        self.assertLess(disable.index("drm_dev_enter(&t6->drm"), disable.index("t6_ctrl_out"))
+        self.assertNotIn(".soft_unbind", source)
+
     def test_idle_refresh_wrapper_pins_reviewed_state_and_is_inert(self):
         path = ROOT / "tools/test_idle_refresh.sh"
         source = path.read_text()

@@ -4,7 +4,9 @@ This is a no-load development repository until the user explicitly starts a
 reviewed hardware test. Preserve upstream copyright, SPDX tags, and provenance.
 
 - Work as the normal user. Keep changes and build artifacts inside this repo.
-- Never install packages, DKMS entries, udev rules, services, or autostart here.
+- Development targets never install packages, DKMS entries, services or autostart.
+  The optional package/controller remains offline until the user separately
+  authorizes a reviewed installation and supervised lifecycle test.
 - Never load/unload kernel modules or write USB/DRM/sysfs controls automatically.
 - Never change `/etc`, `/usr`, `/boot`, `/lib/modules`, or desktop configuration.
 - Never run the donor install, host-guard, VM, or USB/IP scripts.
@@ -22,6 +24,10 @@ reviewed hardware test. Preserve upstream copyright, SPDX tags, and provenance.
   `trigger6_match.h` functions exercised by the host tests.
 - Record build, static, and hardware results separately in `docs/EVIDENCE.md`.
 - Do not imply kernel API or hardware support from a host C test.
+- Test controller/package changes against synthetic roots and injected adapters;
+  preserve the installed-helper ownership guard, exact per-kernel approval,
+  disabled-by-default service, bounded sleep hook and reconnect circuit breaker.
+  Never bypass those guards to run root mutations from this checkout.
 - Treat `docs/MANUAL_TEST.md` commands as future user-run instructions, not as
   permission to execute them. Preserve unrelated user changes.
 

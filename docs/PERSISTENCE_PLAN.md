@@ -1,6 +1,15 @@
-# Proposed persistence and rollback — not installed
+# Original persistence and rollback proposal — historical
 
-Status: design only, following the user-confirmed HP image and DPMS return on
+This records the proposal immediately after physical success. The later approved
+architecture is now implemented and installed for supervised testing in
+[INSTALLATION.md](INSTALLATION.md), including an optional DKMS package and bounded
+controller. Those supersede the implementation deferrals below. The
+[dated installation record](INSTALL_TEST_2026-09-06.md) is authoritative for the
+current host state, including the stock UKI rebuild and incomplete sleep test.
+Startup remains disabled. The preservation/recovery principles
+and original evidence remain applicable.
+
+Historical status when this proposal was written: design only, following the user-confirmed HP image and DPMS return on
 2026-09-06. The module is temporarily resident but now unbound after a later
 whole-dock detach and host hibernation/resume. No package, module copy in
 a system directory, DKMS entry, udev rule, service, autoload, initramfs change,

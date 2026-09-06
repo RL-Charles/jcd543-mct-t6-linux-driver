@@ -20,15 +20,41 @@ diff; the [runtime record](docs/RUNTIME_TEST_2026-09-05.md) preserves earlier bl
 screens, reconnects, and the successful test separately.
 
 The successful profile uses the explicit head-0 Aquamarine name shim and raw
-idle refresh. **Latest state at 08:26:** a later whole-dock detach and host
-hibernation/resume re-enumerated the T6; `cec6a342…` remains resident but unbound,
-and the one-probe latch correctly refused automatic reinitialization. This is
-not persistent/hotplug-ready output. Head 1 has never received frames. All
-defaults remain inert. `W=1` and offline
-Python/GCC/Clang sanitizer checks pass against exact signed Arch headers staged
-inside this repo. **Nothing is permanently installed, and no desktop config was
-changed.** System headers remain uninstalled. A rollback-safe
-[persistence plan](docs/PERSISTENCE_PLAN.md) is proposed only; it has not run.
+idle refresh. **Installed-artifact physical success at 12:53 Mountain:** matching
+headers, DKMS and the reviewed local package are now installed, and the user
+confirmed the HP image from its separately approved DKMS build. A first start
+after the earlier S4 state failed safely; the unchanged build worked after a
+true dock cold reset. The installed watcher adopted the working generation
+without reinitializing it. Ten external-only DPMS cycles then passed, including
+zero settled-off USB traffic and a new real frame after each wake.
+The subsequent sleep-hook simulation stopped at a cleanup refusal. A guarded
+restore saw status0 and refused; after a second true dock cold reset, the user
+confirmed the image again on device119 at the 13:11 recovery. The installed
+`0.1.0-2` reference-release fix then passed an isolated pre-sleep stop in 120ms.
+The dock still re-enumerated 4.36s after teardown; another dock cold reset left
+head0 reporting status0. An **HP-only AC power cycle**, without reconnecting USB
+or HDMI, restored status1 on the same device125. Its single approved start at
+14:15 produced another **user-confirmed stable, visible test window**.
+**Current host state, September 6 at 15:59 Mountain:** package `0.1.0-4` is
+installed, its exact DKMS artifact separately approved, and the display is live.
+The installed final-off profile passed one active stop, 15 seconds without a
+reset, one warm restart, and a 45-second zero-fault streaming sample. The user
+confirmed the installed image before this cycle. At the user's explicit request,
+startup was enabled at 15:59:51; the watcher adopted the live generation without
+reloading it. This is an opt-in experimental installation, not full lifecycle
+certification. Actual reboot, suspend/resume, deliberate unplug/replug, uninstall/
+rollback and a one-hour mixed-workload soak remain unverified. Native 1440p,
+head1/VGA and dual-head operation remain unsupported by the tested profile.
+The GTK/Wayland terminal hotplug-crash finding remains a client safety concern.
+Head1 has never received frames, kernel defaults remain inert, and no desktop
+configuration was changed. See the [dated installed lifecycle evidence](docs/INSTALL_TEST_2026-09-06.md).
+
+`W=1` and offline Python/GCC/Clang sanitizer checks pass. The actual DKMS build
+also passed with matching system headers. The host's standard DKMS package hook
+rebuilt the UKI; read-only inspection found the blacklist but no trigger6 module
+inside it. Review the [dated installation/boot and runtime evidence](docs/INSTALL_TEST_2026-09-06.md)
+and [rollback procedure](docs/INSTALLATION.md) before further changes. A working
+short test is not hotplug, sleep, reboot or unattended-use certification.
 
 ## Start here — no installation
 
@@ -40,8 +66,11 @@ make build-staged    # use the verified repo-local headers; optional BTF omitted
 make build           # alternative: use system-installed matching headers
 ```
 
-`make install` and `make uninstall` deliberately fail. The repository contains
-no DKMS, udev, service, autostart, firmware updater, or unattended loader.
+`make install` and `make uninstall` deliberately fail. The separate reviewed
+`packaging/PKGBUILD` includes DKMS source, an initially disabled bounded controller,
+and a sleep hook. Building its archive never installs, loads, approves, or enables
+anything. There is no udev rule, firmware updater, or automatic kernel approval.
+See [installation and removal](docs/INSTALLATION.md) before any package action.
 The privileged one-run tools are inert by default, require explicit root review tokens,
 and reject changed device/session/artifact state; normal make targets never run them.
 They are historical, machine-session-specific experiments, not general setup
@@ -65,6 +94,7 @@ be diagnosed through the laptop's USB-C/display path.
 | `output_mask` | `0` | Active operation requires `1` (logical head 0) or `2` (logical head 1) |
 | `aquamarine_evdi_name` | `0` | Head-0-only, temporary DRM-name compatibility experiment for Aquamarine 0.14.0; module and USB driver remain `trigger6`, with no evdi private ABI |
 | `raw_idle_refresh` | `0` | Head-0-only experiment: replay the last real raw frame after one idle second, only while the CRTC is active and all connection/fault guards pass |
+| `final_monitor_off` | `0` | Required by the opt-in installed profile: one guarded head0 EP0 off after DRM/work drain; 250ms deadline, no retry/fault-latch change. Isolated and installed active-stop/quiet trials passed; sleep/replug remain unverified |
 | `query_only` | `0` | With explicit non-manual single-head selection, query RAM/status/valid base EDID only; no vendor OUT, chip setup, DRM, or frames. `manual_only=1` still permits descriptors only |
 | `query_timings` | `0` | Requires query-only head 0, valid sink/EDID, and disabled shim/refresh; read a timing count and at most 16 firmware records through EP0 IN, never apply them |
 | `query_timing_page1` | `0` | Requires the timing query and measured count 36; read only records 16–31 at documented byte offset 512, still 512 bytes maximum |
@@ -77,14 +107,18 @@ other wiring and detailed color/image quality remain unverified.
 Both inherited DRM connector
 names say HDMI-A; those names do not identify the physical VGA port.
 
-Faults latch USB traffic off. There are no automatic USB resets, background
-reprobes, startup black-frame bursts, or resume reinitialization. A deliberately
-reconnected test is required after an error or suspend.
+Faults latch USB traffic off. The kernel performs no automatic USB reset,
+background reprobe, startup black-frame burst, or resume reinitialization.
+The opt-in installed controller can manage a separately approved new generation
+through bounded normal removal/insertion; faults and rapid re-enumeration latch
+manual recovery. Its lifecycle behavior still needs supervised hardware validation.
 The current source permits only **one active probe attempt per module insertion**,
 including failed probes. Further USB-core probes refuse before allocation/I/O;
 ordinary removal and a separately reviewed insertion are required for another
-attempt. Earlier tested artifacts did not have this additional guard. Unload
-the module after a supervised test to end that authorization.
+attempt. Earlier tested artifacts did not have this additional guard. End a
+one-run manual test with reviewed normal removal. For the explicitly enabled
+installation, stop the service first so its watcher cannot race manual cleanup;
+see the installed stop/removal procedure.
 
 ## Review and testing
 
@@ -94,10 +128,13 @@ the module after a supervised test to end that authorization.
 - [Hardware evidence and verification results](docs/EVIDENCE.md)
 - [Supervised runtime tests and physical success](docs/RUNTIME_TEST_2026-09-05.md)
 - [Contained raw idle-refresh experiment and DPMS safeguards](docs/IDLE_REFRESH_EXPERIMENT.md)
+- [Offline final monitor-off design and verification gates](docs/QUIESCE_EXPERIMENT.md)
 - [Bounded timing query, request provenance, and offline decoder](docs/TIMING_QUERY.md)
-- [Proposed persistence and rollback plan — not installed](docs/PERSISTENCE_PLAN.md)
+- [Original persistence and rollback proposal — historical](docs/PERSISTENCE_PLAN.md)
+- [Package/controller, dry-run, installation and uninstall](docs/INSTALLATION.md)
+- [Installed-artifact physical proof, boot-hook audit and lifecycle tests](docs/INSTALL_TEST_2026-09-06.md)
 - [Development notes and verified timing fix](docs/DEVELOPMENT.md)
-- [Usability specification and staged roadmap — future work](docs/USABILITY_SPEC.md)
+- [Usability specification and staged implementation status](docs/USABILITY_SPEC.md)
 - [Upstream audit, provenance, limitations, and licensing](docs/UPSTREAM_AUDIT.md)
 - [Development rules](AGENTS.md)
 

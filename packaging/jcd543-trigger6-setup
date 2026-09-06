@@ -1,0 +1,3 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+exec /usr/bin/python3 -I -B /usr/lib/jcd543-trigger6/setup.py "$@"

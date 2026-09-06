@@ -17,6 +17,8 @@ preflight:
 
 check:
 	python3 tests/check_source.py
+	python3 tests/test_controller.py
+	python3 tests/test_setup.py
 	$(MAKE) -C tests check
 
 build:

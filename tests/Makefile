@@ -3,10 +3,11 @@ CC ?= cc
 CFLAGS := -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
 .PHONY: check
 
-check: build/test_match build/test_refresh build/test_query
+check: build/test_match build/test_refresh build/test_query build/test_quiesce
 	./build/test_match
 	./build/test_refresh
 	./build/test_query
+	./build/test_quiesce
 
 build/test_match: test_match.c ../kernel/trigger6_match.h
 	mkdir -p build
@@ -19,3 +20,7 @@ build/test_refresh: test_refresh.c ../kernel/trigger6_refresh.h
 build/test_query: test_query.c ../kernel/trigger6_query.h
 	mkdir -p build
 	$(CC) $(CFLAGS) -o $@ test_query.c
+
+build/test_quiesce: test_quiesce.c ../kernel/trigger6_quiesce.h
+	mkdir -p build
+	$(CC) $(CFLAGS) -o $@ test_quiesce.c

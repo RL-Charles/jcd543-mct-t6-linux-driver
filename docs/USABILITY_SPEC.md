@@ -1,10 +1,20 @@
 # ThinkPad + JCD543 usability specification and staged plan
 
-Status: **proposal, not implemented**. This plan turns the narrowly working
+Status: **M1/M4 installed; packaged M3 image physically verified; rel4 M2
+active stop/warm restart passed; startup explicitly enabled at user request**.
+The live installed watcher adopted the working generation without reload at
+15:59:51 on September 6. Actual reboot, suspend/resume, deliberate replug,
+uninstall/rollback and a one-hour soak remain release gates, not completed work.
+A separate
+GTK/Wayland hotplug SIGSEGV in the main Ghostty singleton adds a desktop-client
+safety gate before further reviewed lifecycle work.
+This plan turns the narrowly working
 manual experiment into a maintainable, explicitly opt-in setup for the tested
 ThinkPad/Omarchy system. It does not authorize system writes or runtime changes.
 Read [DEVELOPMENT.md](DEVELOPMENT.md) for the current implementation and
 [PERSISTENCE_PLAN.md](PERSISTENCE_PLAN.md) for immediate rollback requirements.
+The implemented package/controller and exact rollout gates are documented in
+[INSTALLATION.md](INSTALLATION.md); later sections retain broader future work.
 
 ## Target and definition of done
 
@@ -15,11 +25,17 @@ Hyprland/Aquamarine versions first; a version matrix must identify later verifie
 versions explicitly. JCD543P labels, other firmware, VGA, two heads, higher modes,
 and the separate DP Alt Mode HDMI/DP pair are not implied by this profile.
 
-As of the 08:26 follow-up, the original correct module is resident but unbound
-after a whole-dock detach and host hibernation/resume. The one-attempt refusal
-worked; automatic recovery did not exist. System `linux-headers` and DKMS remain
-absent, although exact signed headers are staged locally. This is the concrete
-starting state for implementation, not an already installed/always-on product.
+The 08:26 starting state was an old resident/unbound module after whole-dock
+detach/S4 resume. Matching headers, DKMS and the reviewed package have since
+been installed and approved. Cold reset plus the unchanged packaged kernel
+produced a physically confirmed HP image; ten software DPMS cycles passed.
+Sleep pre-cleanup refused, the warm guarded restore saw status0, and a second
+cold reset restored a user-confirmed image. The revised stop fix passed; another
+dock cold reset left status0, whereas an HP-only AC cycle restored status1 and
+physical output on unchanged device125. The rel4 installed active stop/restart
+kept that generation stable; current state is module live and watcher enabled/
+running after explicit user authorization. The [dated record](INSTALL_TEST_2026-09-06.md)
+separates these outcomes and the host's standard UKI rebuild from future work.
 
 Other dock functions stay separate: the observed AX88179B `0b95:1790` uses native
 `cdc_ncm`, while NetworkManager reports Ethernet unavailable; no separate dock
@@ -49,23 +65,35 @@ The initial release must meet these acceptance gates:
 - Until separately validated, unplug or suspend requires an explicit fresh test;
   documentation states that limitation visibly instead of silently retrying.
 
-These are **future thresholds**; the current evidence covers a short static
-sample, one DPMS cycle, and physical image/return confirmation only.
+These remain **release thresholds**. Short static samples, installed-image
+physical confirmation and ten software DPMS cycles passed. The final physical
+DPMS confirmation crossed with the failed sleep pre-test, so it is not counted
+as a separately confirmed ten-cycle physical return. One-hour soak, clean sleep,
+hotplug, reboot/upgrade and actual uninstall acceptance are incomplete.
 
 ## Milestones and dependencies
 
 | Milestone | Deliverable | Exit evidence |
 | --- | --- | --- |
 | M0 — done narrowly | Verified mode fix, inert defaults, supervised head0 image and DPMS return | Dated local physical report, exact hash, zero-fault short samples |
-| M1 — manual usability | Portable read-only preflight, reviewed current-kernel deployment, explicit start/stop and manifest uninstall | Clean-machine dry-run plus supervised install/remove/recovery tests |
-| M2 — lifecycle | Deterministic detach/suspend/power transitions with bounded ownership and fault handling | Fault-injection/lifetime tests plus a separately authorized hardware matrix |
-| M3 — integration | Capability-based Hyprland/Aquamarine renderless KMS support; opt-in startup policy | No evdi impersonation on supported compositor, healthy eDP fallback |
-| M4 — packaging | Maintained version matrix, optional DKMS policy, signed-source/package workflow | Upgrade/refusal/rollback tests and documented support ownership |
+| M1 — installed, acceptance partial | Root-owned setup/controller, exact artifact approval, status/start/stop and manifest uninstall | Installed manifest/Qkk and sandbox checks pass; actual removal/rollback untested; status UX correction installed/verified |
+| M2 — rel4 installed, lifecycle partial | Exact final-off controller profile, fresh descriptor/udev generations, budgets/circuit breaker, bounded sleep quiesce; unchanged kernel latch | Installed stop returned0 with15s quiet; warm restart and45s streaming passed; actual replug/sleep/one-hour matrix pending |
+| M3 — packaged image verified, startup opted in | Existing 0.56.2/0.14.0 compatibility shim; package versions pinned before activation; no config edits | User confirmed packaged image/recovery; enabled watcher adopted without reload; GTK Wayland hotplug crash remains a client risk; actual boot and native capability integration pending |
+| M4 — current-kernel DKMS installed | DKMS source package, root-owned manifest, build-only autoinstall, explicit current-kernel hash approval | Installed W=1 artifact approved and physically tested; stock UKI rebuild audited; boot/upgrade/rollback runtime gates pending |
 | M5 — broader displays | Validated EDID/firmware-mode selection and separately evaluated head1 | Per-mode/per-port physical evidence; no simultaneous heads by assumption |
 
 M1 must retain the single-attempt guard. Automatic reconnect/startup depends on
 M2 ownership/fault proofs; M4 must not auto-enable features that have not passed
 M2/M3. M5 is independent research, not required to make head0 1080p usable.
+The user's September 6 early startup opt-in does not waive or mark the remaining
+release thresholds passed. Native 2560×1440, head1/VGA and dual-head remain outside
+the currently installed head0 1080p60 profile.
+
+The initial controller supports the currently reviewed kernel only until another
+installed artifact is explicitly approved. DKMS never updates approval. The first
+approval command refuses to overwrite a different existing manifest; adding a
+new-kernel approval remains a separate reviewed maintenance step. This fail-closed
+upgrade boundary is tested, not equivalent to a completed cross-kernel test.
 
 ## M1: discovery, identity, deployment and removal
 
@@ -99,8 +127,11 @@ files before activation; refuse existing foreign files and preserve changed ones
 
 Choose either a versioned explicit-path deployment or the standard current-kernel
 module tree with reviewed dependency metadata updates. Document the modalias
-autoload implications of that choice. No startup entry, initramfs change, udev
-rule, DisplayLink manager, or compositor config change is implicit in install.
+autoload implications of that choice. Startup enablement, udev rules,
+DisplayLink manager or compositor config changes are not implicit in install.
+Host package hooks are a separate installation effect: on this Omarchy host,
+the DKMS source package triggered a UKI rebuild and Limine update. Audit and
+document those effects for installation, update and removal.
 Activation stays one user-requested attempt, query switches off, one head only.
 
 Provide explicit stop/status commands and the manifest-based uninstall described

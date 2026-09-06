@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Local reviewed-checkout package. No download, activation, or enable hook.
+pkgname=jcd543-trigger6-dkms
+pkgver=0.1.0
+pkgrel=4
+pkgdesc='Experimental guarded MCT JCD543 HDMI driver and opt-in controller'
+arch=('x86_64')
+url='https://github.com/RL-Charles/jcd543-mct-t6-linux-driver'
+license=('GPL-2.0-only')
+depends=('dkms' 'python' 'kmod' 'systemd')
+optdepends=('linux-headers: build for the standard Arch kernel')
+backup=('etc/modprobe.d/jcd543-trigger6.conf')
+options=('!strip' '!debug')
+source=()
+sha256sums=()
+
+package() {
+    local checkout_dir
+    checkout_dir="$(/usr/bin/realpath -e -- "$startdir/..")"
+    [[ -f "$checkout_dir/kernel/trigger6_drv.c" && -f "$checkout_dir/LICENSE" ]] || return 1
+    install -Dm644 "$startdir/dkms.conf" "$pkgdir/usr/src/jcd543-trigger6-$pkgver/dkms.conf"
+    local kernel_file
+    for kernel_file in trigger6_drv.c trigger6_connector.c trigger6_codec.c trigger6.h trigger6_codec.h trigger6_match.h trigger6_refresh.h trigger6_query.h trigger6_quiesce.h Kbuild; do
+        install -Dm644 "$checkout_dir/kernel/$kernel_file" "$pkgdir/usr/src/jcd543-trigger6-$pkgver/kernel/$kernel_file"
+    done
+    install -Dm644 "$checkout_dir/control/controller.py" "$pkgdir/usr/lib/jcd543-trigger6/controller.py"
+    install -Dm644 "$checkout_dir/control/setup.py" "$pkgdir/usr/lib/jcd543-trigger6/setup.py"
+    install -Dm755 "$startdir/jcd543-trigger6" "$pkgdir/usr/bin/jcd543-trigger6"
+    install -Dm755 "$startdir/jcd543-trigger6-setup" "$pkgdir/usr/bin/jcd543-trigger6-setup"
+    install -Dm644 "$startdir/jcd543-trigger6.service" "$pkgdir/usr/lib/systemd/system/jcd543-trigger6.service"
+    install -Dm755 "$startdir/jcd543-trigger6-sleep" "$pkgdir/usr/lib/systemd/system-sleep/jcd543-trigger6"
+    install -Dm644 "$startdir/jcd543-trigger6.conf" "$pkgdir/etc/modprobe.d/jcd543-trigger6.conf"
+    local document
+    for document in INSTALLATION.md DEVELOPMENT.md USABILITY_SPEC.md QUIESCE_EXPERIMENT.md; do
+        install -Dm644 "$checkout_dir/docs/$document" "$pkgdir/usr/share/doc/jcd543-trigger6/$document"
+    done
+    install -Dm644 "$checkout_dir/SAFETY.md" "$pkgdir/usr/share/doc/jcd543-trigger6/SAFETY.md"
+    install -Dm644 "$checkout_dir/LICENSES/GPL-2.0-only.txt" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    /usr/bin/python3 "$startdir/manifest.py" "$pkgdir" "$pkgver-$pkgrel"
+}
