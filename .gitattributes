@@ -1,0 +1,5 @@
+# Keep GitHub's language bar focused on shipped implementation code. These
+# Python files are tests, offline analysis tools, or build-time packaging tools.
+tests/*.py -linguist-detectable
+tools/*.py -linguist-detectable
+packaging/manifest.py -linguist-detectable
